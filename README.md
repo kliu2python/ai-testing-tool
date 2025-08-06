@@ -2,7 +2,7 @@
 
 ## Demo
 
-The test case is 
+The test case is
 
 ```
 When you add a google account in Passwords & accounts, username is abc@gmail.com, password is 123456. Then you should see an error "Couldn't find your Google Account".
@@ -20,13 +20,15 @@ When you add a google account in Passwords & accounts, username is abc@gmail.com
 Run the following command to run the tool
 
 ```sh
-OPENAI_API_KEY=<openai api key> python ai-testing-tool.py <system prompt file> <task file> --appium=<appium server address>
+OPENAI_API_KEY=<openai api key> python ai-testing-tool.py <system prompt file> <task file> \
+  --server=<automation server address> --platform=<android|ios|web>
 ```
 
 Run the following command to run the tool in debug mode
 
 ```sh
-python ai-testing-tool.py <system prompt file> <task file> --appium=<appium server address> --debug
+python ai-testing-tool.py <system prompt file> <task file> --debug \
+  --server=<automation server address> --platform=<android|ios|web>
 ```
 
 ## Acknowledgements
