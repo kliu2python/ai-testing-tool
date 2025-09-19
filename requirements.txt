@@ -3,3 +3,5 @@ Appium-Python-Client
 pillow
 pyyaml
 selenium
+fastapi
+uvicorn
