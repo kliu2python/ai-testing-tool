@@ -31,6 +31,35 @@ python ai-testing-tool.py <system prompt file> <task file> --debug \
   --server=<automation server address> --platform=<android|ios|web>
 ```
 
+## Running as a FastAPI service
+
+You can expose the tool as a remote service using FastAPI. Install the
+requirements and launch the API with Uvicorn:
+
+```sh
+pip install -r requirements.txt
+uvicorn ai_testing_tool.api:app --host 0.0.0.0 --port 8000
+```
+
+The server listens on all interfaces so that it can be reached from remote
+clients. Trigger a run by sending a `POST` request to `/run` with the prompt,
+tasks, and configuration:
+
+```sh
+curl -X POST "http://<server-ip>:8000/run" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "prompt": "<system prompt text>",
+        "tasks": [ ... task definitions ... ],
+        "server": "http://localhost:4723",
+        "platform": "android",
+        "reports_folder": "./reports"
+      }'
+```
+
+The response returns the aggregated summary along with the path to the generated
+`summary.json` report inside the reports directory.
+
 ## Acknowledgements
 
 1. https://github.com/Nikhil-Kulkarni/qa-gpt
