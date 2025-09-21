@@ -1,4 +1,5 @@
 """FastAPI application exposing the AI testing tool as a service."""
+
 from __future__ import annotations
 
 import os
@@ -9,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from runner import RunResult, run_tasks
+from runner import RunResult, run_tasks_async
 
 
 # -----------------------------
@@ -17,6 +18,7 @@ from runner import RunResult, run_tasks
 # -----------------------------
 class Platform(str, Enum):
     """Supported automation platforms."""
+
     android = "android"
     ios = "ios"
     web = "web"
@@ -24,6 +26,7 @@ class Platform(str, Enum):
 
 class RunRequest(BaseModel):
     """Request payload for running automation tasks."""
+
     prompt: str = Field(..., description="System prompt guiding the agent.")
     tasks: List[Dict[str, Any]] = Field(
         ..., description="List of task definitions to execute."
@@ -48,6 +51,7 @@ class RunRequest(BaseModel):
 
 class RunResponse(BaseModel):
     """Response payload containing aggregated run results."""
+
     summary: List[Dict[str, Any]]
     summary_path: str
 
@@ -79,7 +83,9 @@ def _ensure_reports_folder() -> None:
         os.makedirs(default_reports, exist_ok=True)
     except Exception as exc:  # pragma: no cover
         # Not fatal; individual runs also try to create their own paths.
-        print(f"[WARN] Failed to create default reports folder '{default_reports}': {exc}")
+        print(
+            f"[WARN] Failed to create default reports folder '{default_reports}': {exc}"
+        )
 
 
 @app.get("/", summary="Health check")
@@ -89,10 +95,10 @@ def read_root() -> Dict[str, str]:
 
 
 @app.post("/run", response_model=RunResponse, summary="Run automation tasks")
-def run_automation(request: RunRequest) -> RunResponse:
+async def run_automation(request: RunRequest) -> RunResponse:
     """Execute automation tasks using the provided configuration."""
     try:
-        result: RunResult = run_tasks(
+        result: RunResult = await run_tasks_async(
             request.prompt,
             request.tasks,
             request.server,
