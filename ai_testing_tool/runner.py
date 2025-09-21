@@ -98,10 +98,15 @@ def generate_next_action(
         }
     )
 
-    openAI = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    openAI = OpenAI(api_key="sk-nNExWdZTkr345v7Ht5xzOQ", base_url="http://10.160.29.219:4000/v1")
     chat_response = openAI.chat.completions.create(
-        model="gpt-4-turbo", messages=messages, max_tokens=200
+        model="ollama/qwen2.5vl:32b", messages=messages
     )
+
+    # openAI = OpenAI(api_key="sk-RKRlOBmzoU98cdadrz3KUw", base_url="http://10.160.18.17:4000/v1")
+    # chat_response = openAI.chat.completions.create(
+    #     model="local-qwen2-5vl-32b", messages=messages
+    # )
 
     content = chat_response.choices[0].message.content
     return content
@@ -109,14 +114,15 @@ def generate_next_action(
 
 def create_driver(server: str, platform: str) -> Any:
     """Create a webdriver for the desired platform."""
-
+    server = f"{server}/wd/hub"
     if platform == "android":
         capabilities = dict(
             platformName="Android",
             automationName="uiautomator2",
-            deviceName="Android",
+            avd="google_api",
             language="en",
             locale="US",
+            newCommandTimeout=0
         )
         return webdriver.Remote(
             server,
@@ -355,12 +361,67 @@ def parse_bounds(bounds: str) -> Tuple[int, int, int, int]:
     return (left, top, right, bottom)
 
 
+def safe_json_loads(raw):
+    """Return dict/list from a messy JSON-looking string (code fences, quotes, etc.)."""
+    if isinstance(raw, (dict, list)) or raw is None:
+        return raw
+
+    s = str(raw).strip().lstrip("\ufeff")  # drop BOM if present
+
+    # Drop one pair of wrapping quotes if present
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1].strip()
+
+    # Remove Markdown code fences like ```json ... ```
+    s = re.sub(r'^\s*```[a-zA-Z0-9_-]*\s*', '', s)
+    s = re.sub(r'\s*```\s*$', '', s)
+    s = s.strip()
+
+    # If there’s leading chatter, cut to the first object/array
+    starts = [p for p in (s.find('{'), s.find('[')) if p != -1]
+    if starts:
+        s = s[min(starts):]
+
+    # First attempt: straight parse
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        # Fallback: clip to a balanced top-level {...} or [...]
+        def clip_balanced(text):
+            opens = {'{': '}', '[': ']'}
+            if not text or text[0] not in opens:
+                return text
+            open_ch, close_ch = text[0], opens[text[0]]
+            depth, in_str, esc = 0, False, False
+            for i, ch in enumerate(text):
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == '\\':
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch == open_ch:
+                    depth += 1
+                elif ch == close_ch:
+                    depth -= 1
+                    if depth == 0:
+                        return text[:i+1]
+            return text  # give up—let json.loads raise below
+
+        clipped = clip_balanced(s)
+        return json.loads(clipped)
+
+
 def process_next_action(
     action: str, driver: Any, folder: str, step_name: str
 ) -> Tuple[Optional[str], Optional[str], str]:
     """Execute the JSON ``action`` and return artifacts paths."""
 
-    data = json.loads(action)
+    data = safe_json_loads(action)
 
     if data["action"] == "error" or data["action"] == "finish":
         take_page_source(driver, folder, step_name),
@@ -406,7 +467,8 @@ def process_next_action(
         )
         if elements:
             elements[0].send_keys(value)
-            driver.hide_keyboard()
+            if driver.is_keyboard_shown():
+                    driver.hide_keyboard()
             data["result"] = "success"
         else:
             data["result"] = f"can't find element in bounds {bounds}"
