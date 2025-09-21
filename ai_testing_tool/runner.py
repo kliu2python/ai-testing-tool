@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import datetime
 import json
 import os
+import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from time import sleep
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -30,6 +34,21 @@ class RunResult:
 
     summary: List[Dict[str, Any]]
     summary_path: str
+
+
+_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_EXECUTOR_LOCK = threading.Lock()
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    """Return a lazily initialised thread pool for background runs."""
+
+    global _EXECUTOR
+    with _EXECUTOR_LOCK:
+        if _EXECUTOR is None:
+            max_workers = int(os.getenv("RUNNER_MAX_WORKERS", "4"))
+            _EXECUTOR = ThreadPoolExecutor(max_workers=max_workers)
+    return _EXECUTOR
 
 
 def read_file_content(file_path: str) -> Optional[str]:
@@ -90,15 +109,15 @@ def generate_next_action(
                 },
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{screenshot_base64}"
-                    },
+                    "image_url": {"url": f"data:image/jpeg;base64,{screenshot_base64}"},
                 },
             ],
         }
     )
 
-    openAI = OpenAI(api_key="sk-nNExWdZTkr345v7Ht5xzOQ", base_url="http://10.160.29.219:4000/v1")
+    openAI = OpenAI(
+        api_key="sk-nNExWdZTkr345v7Ht5xzOQ", base_url="http://10.160.29.219:4000/v1"
+    )
     chat_response = openAI.chat.completions.create(
         model="ollama/qwen2.5vl:32b", messages=messages
     )
@@ -122,7 +141,7 @@ def create_driver(server: str, platform: str) -> Any:
             avd="google_api",
             language="en",
             locale="US",
-            newCommandTimeout=0
+            newCommandTimeout=0,
         )
         return webdriver.Remote(
             server,
@@ -168,9 +187,7 @@ def resize_image(
     return img.resize((new_width, new_height))
 
 
-def draw_grid_with_labels(
-    image_path: str, grid_size: int, output_path: str
-) -> None:
+def draw_grid_with_labels(image_path: str, grid_size: int, output_path: str) -> None:
     """Overlay a coordinate grid on ``image_path`` and save to ``output_path``."""
 
     with Image.open(image_path) as img:
@@ -369,18 +386,20 @@ def safe_json_loads(raw):
     s = str(raw).strip().lstrip("\ufeff")  # drop BOM if present
 
     # Drop one pair of wrapping quotes if present
-    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+    if (s.startswith('"') and s.endswith('"')) or (
+        s.startswith("'") and s.endswith("'")
+    ):
         s = s[1:-1].strip()
 
     # Remove Markdown code fences like ```json ... ```
-    s = re.sub(r'^\s*```[a-zA-Z0-9_-]*\s*', '', s)
-    s = re.sub(r'\s*```\s*$', '', s)
+    s = re.sub(r"^\s*```[a-zA-Z0-9_-]*\s*", "", s)
+    s = re.sub(r"\s*```\s*$", "", s)
     s = s.strip()
 
     # If there’s leading chatter, cut to the first object/array
-    starts = [p for p in (s.find('{'), s.find('[')) if p != -1]
+    starts = [p for p in (s.find("{"), s.find("[")) if p != -1]
     if starts:
-        s = s[min(starts):]
+        s = s[min(starts) :]
 
     # First attempt: straight parse
     try:
@@ -388,7 +407,7 @@ def safe_json_loads(raw):
     except json.JSONDecodeError:
         # Fallback: clip to a balanced top-level {...} or [...]
         def clip_balanced(text):
-            opens = {'{': '}', '[': ']'}
+            opens = {"{": "}", "[": "]"}
             if not text or text[0] not in opens:
                 return text
             open_ch, close_ch = text[0], opens[text[0]]
@@ -397,7 +416,7 @@ def safe_json_loads(raw):
                 if in_str:
                     if esc:
                         esc = False
-                    elif ch == '\\':
+                    elif ch == "\\":
                         esc = True
                     elif ch == '"':
                         in_str = False
@@ -409,7 +428,7 @@ def safe_json_loads(raw):
                 elif ch == close_ch:
                     depth -= 1
                     if depth == 0:
-                        return text[:i+1]
+                        return text[: i + 1]
             return text  # give up—let json.loads raise below
 
         clipped = clip_balanced(s)
@@ -450,9 +469,7 @@ def process_next_action(
         swipe_end_x = data["swipe_end_x"]
         swipe_end_y = data["swipe_end_y"]
         duration = data["duration"]
-        driver.swipe(
-            swipe_start_x, swipe_start_y, swipe_end_x, swipe_end_y, duration
-        )
+        driver.swipe(swipe_start_x, swipe_start_y, swipe_end_x, swipe_end_y, duration)
         sleep(duration / 1000)
         data["result"] = "success"
     elif data["action"] == "input" and "bounds" in data:
@@ -462,13 +479,11 @@ def process_next_action(
         tap_x = left + (right - left) / 2
         tap_y = top + (bottom - top) / 2
         driver.tap([(tap_x, tap_y)])
-        elements = driver.find_elements(
-            by=AppiumBy.XPATH, value="//*[@focused='true']"
-        )
+        elements = driver.find_elements(by=AppiumBy.XPATH, value="//*[@focused='true']")
         if elements:
             elements[0].send_keys(value)
             if driver.is_keyboard_shown():
-                    driver.hide_keyboard()
+                driver.hide_keyboard()
             data["result"] = "success"
         else:
             data["result"] = f"can't find element in bounds {bounds}"
@@ -529,7 +544,7 @@ def generate_summary_report(reports_folder: str, summary: List[dict]) -> str:
     return write_to_file(report_path, json.dumps(summary, indent=2))
 
 
-def run_tasks(
+def _run_tasks(
     prompt: str,
     tasks: List[Dict[str, Any]],
     server: str,
@@ -542,9 +557,7 @@ def run_tasks(
     create_folder(reports_folder)
     driver = create_driver(server, platform)
     driver.implicitly_wait(0.2)
-    thread = threading.Thread(
-        target=lambda: keep_driver_live(driver), daemon=True
-    )
+    thread = threading.Thread(target=lambda: keep_driver_live(driver), daemon=True)
     thread.start()
 
     summary: List[dict] = []
@@ -567,9 +580,7 @@ def run_tasks(
             )
             write_to_file(f"{task_folder}/task.json", json.dumps(task))
             sleep(1)
-            page_source_for_next_step = take_page_source(
-                driver, task_folder, "step_0"
-            )
+            page_source_for_next_step = take_page_source(driver, task_folder, "step_0")
             page_screenshot_for_next_step = take_screenshot(
                 driver, task_folder, "step_0"
             )
@@ -592,15 +603,11 @@ def run_tasks(
                         f"{task_folder}/step_{step}.json",
                         next_action_with_result,
                     )
-                    task_result["steps"].append(
-                        json.loads(next_action_with_result)
-                    )
+                    task_result["steps"].append(json.loads(next_action_with_result))
             else:
                 while page_source_for_next_step is not None:
                     step += 1
-                    page_source = (
-                        read_file_content(page_source_for_next_step) or ""
-                    )
+                    page_source = read_file_content(page_source_for_next_step) or ""
                     history_actions_str = "\n".join(history_actions)
                     prompts = [
                         f"# Task \n {details}",
@@ -637,9 +644,7 @@ def run_tasks(
                         next_action_with_result,
                     )
                     history_actions.append(next_action_with_result)
-                    task_result["steps"].append(
-                        json.loads(next_action_with_result)
-                    )
+                    task_result["steps"].append(json.loads(next_action_with_result))
 
             summary.append(task_result)
 
@@ -648,6 +653,43 @@ def run_tasks(
         driver.quit()
 
     return RunResult(summary=summary, summary_path=summary_path)
+
+
+def run_tasks(
+    prompt: str,
+    tasks: List[Dict[str, Any]],
+    server: str,
+    platform: str,
+    reports_folder: str,
+    debug: bool = False,
+) -> RunResult:
+    """Run tasks synchronously (backwards compatible helper)."""
+
+    return _run_tasks(prompt, tasks, server, platform, reports_folder, debug)
+
+
+async def run_tasks_async(
+    prompt: str,
+    tasks: List[Dict[str, Any]],
+    server: str,
+    platform: str,
+    reports_folder: str,
+    debug: bool = False,
+) -> RunResult:
+    """Run tasks in a shared background executor for concurrency."""
+
+    loop = asyncio.get_running_loop()
+    executor = _get_executor()
+    func = partial(
+        _run_tasks,
+        prompt,
+        tasks,
+        server,
+        platform,
+        reports_folder,
+        debug,
+    )
+    return await loop.run_in_executor(executor, func)
 
 
 def main() -> None:
