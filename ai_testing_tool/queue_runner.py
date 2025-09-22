@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import signal
 from typing import Any, Dict, Optional
 
@@ -39,13 +40,16 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
     owner_id: Optional[str] = task.get("user_id")
     _update_status(redis_client, task_id, {"status": "running"}, owner_id)
 
+    reports_folder = task.get("reports_folder") or "./reports"
+    task_reports_folder = os.path.join(reports_folder, task_id)
+
     try:
         result = _run_tasks(
             task["prompt"],
             task["tasks"],
             task["server"],
             task["platform"],
-            task["reports_folder"],
+            task_reports_folder,
             task["debug"],
         )
     except Exception as exc:  # pragma: no cover - background safety net
