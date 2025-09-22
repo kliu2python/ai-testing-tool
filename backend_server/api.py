@@ -32,6 +32,7 @@ from backend_server.task_store import (
     delete_task_run,
     ensure_task_tables,
     list_task_runs_for_user,
+    load_task_names,
     load_task_run,
     register_task_run,
     set_task_status,
@@ -345,12 +346,19 @@ class RunRequest(BaseModel):
         False,
         description="Enable interactive debug mode requiring manual input.",
     )
+    repeat: int = Field(
+        1,
+        ge=1,
+        le=500,
+        description="Number of times to enqueue the same task run.",
+    )
 
 
 class RunResponse(BaseModel):
     """Response payload containing the queued task identifier."""
 
     task_id: str
+    task_ids: List[str]
 
 
 class TaskStatus(str, Enum):
@@ -382,13 +390,20 @@ class TaskStatusResponse(BaseModel):
     steps: Optional[List[StepInfo]] = None
 
 
+class TaskListEntry(BaseModel):
+    """Lightweight reference to a queued automation run."""
+
+    task_id: str = Field(..., description="Unique identifier for the queued task.")
+    task_name: str = Field(..., description="Declared name of the queued task.")
+
+
 class TaskCollectionResponse(BaseModel):
     """Grouping of task identifiers keyed by their lifecycle status."""
 
-    completed: List[str] = Field(default_factory=list)
-    pending: List[str] = Field(default_factory=list)
-    running: List[str] = Field(default_factory=list)
-    error: List[str] = Field(default_factory=list)
+    completed: List[TaskListEntry] = Field(default_factory=list)
+    pending: List[TaskListEntry] = Field(default_factory=list)
+    running: List[TaskListEntry] = Field(default_factory=list)
+    error: List[TaskListEntry] = Field(default_factory=list)
 
 
 # -----------------------------
@@ -532,35 +547,44 @@ async def run_automation(
     """Enqueue automation tasks to be executed by the background runner."""
 
     redis = _redis_client()
-    task_id = uuid.uuid4().hex
-    payload = request.dict()
-    payload["task_id"] = task_id
-    payload["user_id"] = current_user.id
+    repeat = max(1, request.repeat)
+    base_payload = request.dict()
+    base_payload.pop("repeat", None)
+    base_payload["user_id"] = current_user.id
 
-    try:
-        register_task_run(
-            task_id, current_user.id, request.reports_folder, request.tasks
-        )
-    except sqlite3.Error as exc:  # pragma: no cover - operational failure
-        message = f"Failed to persist task metadata: {exc}"
-        raise HTTPException(status_code=503, detail=message) from exc
+    task_ids: List[str] = []
 
-    try:
-        await redis.set(
-            status_key(task_id),
-            dump_status(
-                {
-                    "status": TaskStatus.pending.value,
-                    "user_id": current_user.id,
-                }
-            ),
-        )
-        await redis.rpush(queue_key(), json.dumps(payload))
-    except Exception as exc:  # pragma: no cover - enqueue failure
-        message = f"Failed to enqueue task: {exc}"
-        raise HTTPException(status_code=503, detail=message) from exc
+    for _ in range(repeat):
+        task_id = uuid.uuid4().hex
+        payload = dict(base_payload)
+        payload["task_id"] = task_id
 
-    return RunResponse(task_id=task_id)
+        try:
+            register_task_run(
+                task_id, current_user.id, request.reports_folder, request.tasks
+            )
+        except sqlite3.Error as exc:  # pragma: no cover - operational failure
+            message = f"Failed to persist task metadata: {exc}"
+            raise HTTPException(status_code=503, detail=message) from exc
+
+        try:
+            await redis.set(
+                status_key(task_id),
+                dump_status(
+                    {
+                        "status": TaskStatus.pending.value,
+                        "user_id": current_user.id,
+                    }
+                ),
+            )
+            await redis.rpush(queue_key(), json.dumps(payload))
+        except Exception as exc:  # pragma: no cover - enqueue failure
+            message = f"Failed to enqueue task: {exc}"
+            raise HTTPException(status_code=503, detail=message) from exc
+
+        task_ids.append(task_id)
+
+    return RunResponse(task_id=task_ids[0], task_ids=task_ids)
 
 
 async def _fetch_task_status(
@@ -621,13 +645,13 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
 
     redis = _redis_client()
     prefix = status_key("")
-    grouped: Dict[str, List[str]] = {
+    grouped: Dict[str, List[TaskListEntry]] = {
         "completed": [],
         "pending": [],
         "running": [],
         "error": [],
     }
-    seen: Set[str] = set()
+    redis_statuses: Dict[str, str] = {}
 
     try:
         async for key in redis.scan_iter(match=f"{prefix}*"):
@@ -641,16 +665,8 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
 
             status_value = data.get("status")
             task_id = key.removeprefix(prefix)
-            seen.add(task_id)
-
-            if status_value == TaskStatus.completed.value:
-                grouped["completed"].append(task_id)
-            elif status_value == TaskStatus.pending.value:
-                grouped["pending"].append(task_id)
-            elif status_value == TaskStatus.running.value:
-                grouped["running"].append(task_id)
-            elif status_value == TaskStatus.failed.value:
-                grouped["error"].append(task_id)
+            if status_value:
+                redis_statuses[task_id] = status_value
     except Exception as exc:  # pragma: no cover - operational failure
         raise HTTPException(
             status_code=503, detail=f"Failed to list tasks: {exc}"
@@ -663,19 +679,39 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
             status_code=503, detail=f"Failed to load stored tasks: {exc}"
         ) from exc
 
+    all_task_ids: Set[str] = set(redis_statuses)
+    for record in records:
+        all_task_ids.add(record["id"])
+
+    names = load_task_names(tuple(all_task_ids))
+
+    def _entry(task_id: str) -> TaskListEntry:
+        name = names.get(task_id, "unnamed")
+        return TaskListEntry(task_id=task_id, task_name=name)
+
+    for task_id, status_value in redis_statuses.items():
+        if status_value == TaskStatus.completed.value:
+            grouped["completed"].append(_entry(task_id))
+        elif status_value == TaskStatus.pending.value:
+            grouped["pending"].append(_entry(task_id))
+        elif status_value == TaskStatus.running.value:
+            grouped["running"].append(_entry(task_id))
+        elif status_value == TaskStatus.failed.value:
+            grouped["error"].append(_entry(task_id))
+
     for record in records:
         task_id = record["id"]
-        if task_id in seen:
+        if task_id in redis_statuses:
             continue
         status_value = record.get("status", TaskStatus.pending.value)
         if status_value == TaskStatus.completed.value:
-            grouped["completed"].append(task_id)
+            grouped["completed"].append(_entry(task_id))
         elif status_value == TaskStatus.pending.value:
-            grouped["pending"].append(task_id)
+            grouped["pending"].append(_entry(task_id))
         elif status_value == TaskStatus.running.value:
-            grouped["running"].append(task_id)
+            grouped["running"].append(_entry(task_id))
         elif status_value == TaskStatus.failed.value:
-            grouped["error"].append(task_id)
+            grouped["error"].append(_entry(task_id))
 
     return TaskCollectionResponse(**grouped)
 

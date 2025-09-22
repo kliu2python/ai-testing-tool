@@ -239,6 +239,33 @@ def load_task_run(task_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+def load_task_names(task_ids: Sequence[str]) -> Dict[str, str]:
+    """Return the declared task name for each ``task_id`` in ``task_ids``."""
+
+    if not task_ids:
+        return {}
+
+    conn = _connect()
+    try:
+        ensure_task_tables(conn)
+        placeholders = ",".join("?" for _ in task_ids)
+        query = (
+            "SELECT run_id, name FROM task_entries "
+            f"WHERE run_id IN ({placeholders}) ORDER BY run_id, id"
+        )
+        cursor = conn.execute(query, tuple(task_ids))
+        names: Dict[str, str] = {}
+        for row in cursor:
+            run_id = row["run_id"]
+            if run_id in names:
+                continue
+            name = row["name"] or "unnamed"
+            names[run_id] = name
+        return names
+    finally:
+        conn.close()
+
+
 def list_task_runs_for_user(user_id: Optional[str]) -> Iterable[Dict[str, str]]:
     """Yield task run identifiers and statuses for ``user_id``."""
 

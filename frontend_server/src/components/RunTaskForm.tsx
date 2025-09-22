@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Button,
   FormControlLabel,
@@ -9,6 +9,7 @@ import {
   Typography
 } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 
 import { apiRequest, formatPayload } from "../api";
 import type {
@@ -145,11 +146,42 @@ export default function RunTaskForm({
   const [debug, setDebug] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [response, setResponse] = useState("");
+  const [repeatCount, setRepeatCount] = useState(1);
+  const [promptCopied, setPromptCopied] = useState(false);
 
   const promptValue =
     promptOption === "custom"
       ? customPrompt
       : PROMPT_TEMPLATES[promptOption];
+
+  useEffect(() => {
+    setPromptCopied(false);
+  }, [promptOption]);
+
+  async function handleCopyTemplate() {
+    if (!promptValue) {
+      return;
+    }
+    if (!navigator.clipboard) {
+      onNotify({
+        message: "Clipboard access is not available in this browser",
+        severity: "warning"
+      });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(promptValue);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 1500);
+      onNotify({ message: "Prompt copied to clipboard", severity: "success" });
+    } catch (error) {
+      console.error("Failed to copy prompt", error);
+      onNotify({
+        message: "Unable to copy the prompt to the clipboard",
+        severity: "error"
+      });
+    }
+  }
 
   async function handleSubmit() {
     if (!token) {
@@ -182,13 +214,22 @@ export default function RunTaskForm({
       return;
     }
 
+    if (!Number.isFinite(repeatCount) || repeatCount < 1) {
+      onNotify({
+        message: "Repeat count must be a positive number",
+        severity: "warning"
+      });
+      return;
+    }
+
     const payload: RunTaskPayload = {
       prompt: promptValue,
       tasks,
       server,
       platform,
       reports_folder: reportsFolder,
-      debug
+      debug,
+      repeat: repeatCount
     };
 
     setSubmitting(true);
@@ -202,7 +243,11 @@ export default function RunTaskForm({
     setSubmitting(false);
 
     if (result.ok) {
-      onNotify({ message: "Task queued successfully", severity: "success" });
+      const message =
+        repeatCount > 1
+          ? `Task queued ${repeatCount} times successfully`
+          : "Task queued successfully";
+      onNotify({ message, severity: "success" });
     } else {
       const message = result.error ?? `Request failed with ${result.status}`;
       onNotify({ message, severity: "error" });
@@ -231,24 +276,35 @@ export default function RunTaskForm({
         <MenuItem value="web">Web prompt</MenuItem>
         <MenuItem value="custom">Custom prompt</MenuItem>
       </TextField>
-      <TextField
-        label={promptOption === "custom" ? "Custom Prompt" : "Prompt"}
-        value={promptValue}
-        onChange={(event) => {
-          if (promptOption === "custom") {
-            setCustomPrompt(event.target.value);
-          }
-        }}
-        fullWidth
-        multiline
-        minRows={6}
-        InputProps={{ readOnly: promptOption !== "custom" }}
-        helperText={
-          promptOption === "custom"
-            ? "Provide your own instructions for the automation assistant."
-            : "Selected template preview."
-        }
-      />
+      {promptOption === "custom" ? (
+        <TextField
+          label="Custom Prompt"
+          value={promptValue}
+          onChange={(event) => setCustomPrompt(event.target.value)}
+          fullWidth
+          multiline
+          minRows={6}
+          helperText="Provide your own instructions for the automation assistant."
+        />
+      ) : (
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={1}
+          alignItems={{ xs: "flex-start", sm: "center" }}
+        >
+          <Typography variant="body2" color="text.secondary">
+            Using the {promptOption === "default" ? "default" : "web"} prompt template.
+          </Typography>
+          <Button
+            variant="outlined"
+            startIcon={<ContentCopyIcon fontSize="small" />}
+            onClick={handleCopyTemplate}
+            sx={{ mt: { xs: 1, sm: 0 } }}
+          >
+            {promptCopied ? "COPIED" : "COPY"}
+          </Button>
+        </Stack>
+      )}
       <TextField
         label="Tasks (JSON list)"
         value={tasksJson}
@@ -279,6 +335,23 @@ export default function RunTaskForm({
         value={reportsFolder}
         onChange={(event) => setReportsFolder(event.target.value)}
         fullWidth
+      />
+      <TextField
+        label="Repeat Count"
+        type="number"
+        value={repeatCount}
+        onChange={(event) => {
+          const next = Number(event.target.value);
+          if (Number.isNaN(next)) {
+            setRepeatCount(1);
+            return;
+          }
+          const normalised = Math.min(500, Math.max(1, Math.floor(next)));
+          setRepeatCount(normalised);
+        }}
+        fullWidth
+        helperText="Number of times to enqueue this run."
+        inputProps={{ min: 1, max: 500 }}
       />
       <FormControlLabel
         control={

@@ -7,7 +7,6 @@ import {
   CardMedia,
   Chip,
   Divider,
-  IconButton,
   Paper,
   Stack,
   Table,
@@ -34,7 +33,8 @@ import type {
   NotificationState,
   StepInfo,
   TaskCollectionResponse,
-  TaskStatusResponse
+  TaskStatusResponse,
+  TaskListEntry
 } from "../types";
 import JsonOutput from "./JsonOutput";
 
@@ -81,12 +81,12 @@ export default function TaskManagementPanel({
     []
   );
 
-  interface TaskRow {
-    id: string;
-    status: TaskStatusKey;
+  interface TaskGroup {
+    task_name: string;
+    runs: { task_id: string; status: TaskStatusKey }[];
   }
 
-  const taskRows = useMemo<TaskRow[]>(() => {
+  const groupedTasks = useMemo<TaskGroup[]>(() => {
     if (!tasks) {
       return [];
     }
@@ -96,8 +96,25 @@ export default function TaskManagementPanel({
       "completed",
       "error"
     ];
-    return statuses.flatMap((status) =>
-      tasks[status].map((id) => ({ id, status }))
+    const groups = new Map<string, TaskGroup>();
+
+    const addEntry = (status: TaskStatusKey, entry: TaskListEntry) => {
+      const key = entry.task_name || "unnamed";
+      const existing = groups.get(key);
+      const run = { task_id: entry.task_id, status };
+      if (existing) {
+        existing.runs.push(run);
+      } else {
+        groups.set(key, { task_name: key, runs: [run] });
+      }
+    };
+
+    statuses.forEach((status) => {
+      tasks[status].forEach((entry) => addEntry(status, entry));
+    });
+
+    return Array.from(groups.values()).sort((a, b) =>
+      a.task_name.localeCompare(b.task_name)
     );
   }, [tasks]);
 
@@ -245,44 +262,35 @@ export default function TaskManagementPanel({
         Viewing tasks as {user ? `${user.email} (${user.role})` : "guest"}. Only
         your own tasks are visible unless you are an administrator.
       </Typography>
-      <Stack direction="row" spacing={2}>
-        <Button
-          startIcon={<RefreshIcon />}
-          variant="outlined"
-          onClick={refreshTasks}
-          disabled={disableActions}
-        >
-          Refresh Tasks
-        </Button>
-        <Button
-          startIcon={<DeleteForeverIcon />}
-          color="error"
-          variant="outlined"
-          onClick={() => deleteTask()}
-          disabled={disableActions || !taskId.trim()}
-        >
-          Delete Task
-        </Button>
-      </Stack>
+      <Button
+        startIcon={<RefreshIcon />}
+        variant="outlined"
+        onClick={refreshTasks}
+        disabled={disableActions}
+        sx={{ alignSelf: "flex-start" }}
+      >
+        Refresh Tasks
+      </Button>
       <Stack spacing={1.5}>
         <Typography variant="h6">Queued Tasks</Typography>
         <Typography variant="body2" color="text.secondary">
-          Click a row to populate the Task ID field for status lookups or to
-          delete the entry directly.
+          Click a task chip to populate the Task ID field or use the delete icon
+          to remove individual runs.
         </Typography>
         <TableContainer component={Paper} variant="outlined">
           <Table size="small" aria-label="queued tasks">
             <TableHead>
               <TableRow>
-                <TableCell>Task ID</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                <TableCell sx={{ width: { xs: "35%", md: "30%" } }}>
+                  Task Name
+                </TableCell>
+                <TableCell>Queued Runs</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {taskRows.length === 0 ? (
+              {groupedTasks.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={3}>
+                  <TableCell colSpan={2}>
                     <Typography
                       variant="body2"
                       color="text.secondary"
@@ -296,41 +304,57 @@ export default function TaskManagementPanel({
                   </TableCell>
                 </TableRow>
               ) : (
-                taskRows.map((row) => (
+                groupedTasks.map((group) => (
                   <TableRow
-                    key={`${row.status}-${row.id}`}
+                    key={group.task_name}
                     hover
-                    onClick={() => setTaskId(row.id)}
-                    selected={taskId.trim() === row.id}
-                    sx={{ cursor: "pointer" }}
+                    sx={{ verticalAlign: "top" }}
                   >
-                    <TableCell>{row.id}</TableCell>
                     <TableCell>
-                      <Chip
-                        label={statusMeta[row.status].label}
-                        color={statusMeta[row.status].color}
-                        size="small"
-                        variant={row.status === "pending" ? "outlined" : "filled"}
-                      />
+                      <Stack spacing={0.5}>
+                        <Typography variant="subtitle2" fontWeight={600}>
+                          {group.task_name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {group.runs.length} run
+                          {group.runs.length === 1 ? "" : "s"}
+                        </Typography>
+                      </Stack>
                     </TableCell>
-                    <TableCell align="right">
-                      <Tooltip title="Delete task">
-                        <span>
-                          <IconButton
-                            aria-label={`delete-${row.id}`}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              deleteTask(row.id);
-                            }}
-                            disabled={
-                              disableActions || deletingId === row.id
-                            }
-                            size="small"
-                          >
-                            <DeleteForeverIcon fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
+                    <TableCell>
+                      <Stack direction="row" spacing={1} flexWrap="wrap">
+                        {group.runs.map((run) => {
+                          const label = `${statusMeta[run.status].label} • ${run.task_id}`;
+                          const isSelected = taskId.trim() === run.task_id;
+                          const canDelete = !disableActions && deletingId !== run.task_id;
+                          return (
+                            <Tooltip title="Click to select or delete" key={run.task_id}>
+                              <Chip
+                                label={label}
+                                color={statusMeta[run.status].color}
+                                size="small"
+                                variant={
+                                  isSelected || run.status === "pending"
+                                    ? "outlined"
+                                    : "filled"
+                                }
+                                onClick={() => setTaskId(run.task_id)}
+                                onDelete={
+                                  canDelete
+                                    ? () => deleteTask(run.task_id)
+                                    : undefined
+                                }
+                                deleteIcon={<DeleteForeverIcon fontSize="small" />}
+                                sx={{
+                                  mr: 1,
+                                  mb: 1,
+                                  borderStyle: isSelected ? "solid" : undefined
+                                }}
+                              />
+                            </Tooltip>
+                          );
+                        })}
+                      </Stack>
                     </TableCell>
                   </TableRow>
                 ))

@@ -26,6 +26,7 @@ export interface RunTaskPayload {
   platform: string;
   reports_folder: string;
   debug: boolean;
+  repeat: number;
 }
 
 export interface NotificationState {
@@ -49,13 +50,19 @@ export interface TaskStatusResponse {
   steps?: StepInfo[];
 }
 
+export interface TaskListEntry {
+  task_id: string;
+  task_name: string;
+}
+
 export interface TaskCollectionResponse {
-  completed: string[];
-  pending: string[];
-  running: string[];
-  error: string[];
+  completed: TaskListEntry[];
+  pending: TaskListEntry[];
+  running: TaskListEntry[];
+  error: TaskListEntry[];
 }
 
 export interface RunResponse {
   task_id: string;
+  task_ids: string[];
 }

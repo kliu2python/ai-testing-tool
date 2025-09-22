@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, SyntheticEvent } from "react";
 import {
   Alert,
   AppBar,
@@ -10,6 +10,7 @@ import {
   CssBaseline,
   Grid,
   Snackbar,
+  SnackbarCloseReason,
   Stack,
   Tab,
   Tabs,
@@ -125,8 +126,8 @@ export default function App() {
   }, []);
 
   function handleSnackbarClose(
-    _event?: unknown,
-    reason?: "timeout" | "clickaway"
+    _event?: Event | SyntheticEvent,
+    reason?: SnackbarCloseReason
   ) {
     if (reason === "clickaway") {
       return;
@@ -255,7 +256,7 @@ export default function App() {
           >
             {notification.message}
           </Alert>
-        ) : null}
+        ) : undefined}
       </Snackbar>
     </ThemeProvider>
   );
