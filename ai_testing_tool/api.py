@@ -83,6 +83,15 @@ class TaskStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class TaskCollectionResponse(BaseModel):
+    """Grouping of task identifiers keyed by their lifecycle status."""
+
+    completed: List[str] = Field(default_factory=list)
+    pending: List[str] = Field(default_factory=list)
+    running: List[str] = Field(default_factory=list)
+    error: List[str] = Field(default_factory=list)
+
+
 # -----------------------------
 # App
 # -----------------------------
@@ -188,6 +197,43 @@ async def _fetch_task_status(task_id: str) -> TaskStatusResponse:
     return TaskStatusResponse(task_id=task_id, **data)
 
 
+async def _collect_tasks_by_status() -> TaskCollectionResponse:
+    """Return all known task identifiers grouped by their status."""
+
+    redis = _redis_client()
+    prefix = status_key("")
+    grouped: Dict[str, List[str]] = {
+        "completed": [],
+        "pending": [],
+        "running": [],
+        "error": [],
+    }
+
+    try:
+        async for key in redis.scan_iter(match=f"{prefix}*"):
+            raw_status = await redis.get(key)
+            if raw_status is None:
+                continue
+            data = load_status(raw_status)
+            status = data.get("status")
+            task_id = key.removeprefix(prefix)
+
+            if status == TaskStatus.completed.value:
+                grouped["completed"].append(task_id)
+            elif status == TaskStatus.pending.value:
+                grouped["pending"].append(task_id)
+            elif status == TaskStatus.running.value:
+                grouped["running"].append(task_id)
+            elif status == TaskStatus.failed.value:
+                grouped["error"].append(task_id)
+    except Exception as exc:  # pragma: no cover - operational failure propagation
+        raise HTTPException(
+            status_code=503, detail=f"Failed to list tasks: {exc}"
+        ) from exc
+
+    return TaskCollectionResponse(**grouped)
+
+
 @app.get(
     "/tasks/{task_id}",
     response_model=TaskStatusResponse,
@@ -197,6 +243,17 @@ async def get_task_status(task_id: str) -> TaskStatusResponse:
     """Return the latest status information for ``task_id``."""
 
     return await _fetch_task_status(task_id)
+
+
+@app.get(
+    "/tasks",
+    response_model=TaskCollectionResponse,
+    summary="List all queued tasks grouped by status",
+)
+async def list_tasks() -> TaskCollectionResponse:
+    """Return the collection of task identifiers grouped by their status."""
+
+    return await _collect_tasks_by_status()
 
 
 @app.get(
