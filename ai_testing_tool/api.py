@@ -29,6 +29,278 @@ from task_queue import (
     status_key,
 )
 
+# -----------------------------
+# Database & Auth helpers
+# -----------------------------
+
+
+@dataclass
+class User:
+    """Authenticated API consumer."""
+
+    id: str
+    email: str
+    role: str
+
+    @property
+    def is_admin(self) -> bool:
+        """Return ``True`` when the user has administrative permissions."""
+
+        return self.role.lower() == "admin"
+
+
+class UserResponse(BaseModel):
+    """Public user payload returned to clients."""
+
+    id: str
+    email: EmailStr
+    role: str
+
+
+class AuthResponse(BaseModel):
+    """Authentication payload containing a bearer token."""
+
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+class SignUpRequest(BaseModel):
+    """Payload for registering a new user."""
+
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+
+
+class LoginRequest(BaseModel):
+    """Payload for authenticating an existing user."""
+
+    email: EmailStr
+    password: str
+
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+_DB_PATH = Path(os.getenv("AITOOL_DB_PATH", str(_PACKAGE_ROOT / "auth.db")))
+_REPORTS_ROOT = Path(
+    os.getenv("REPORTS_ROOT", str(_PACKAGE_ROOT / "reports"))
+).resolve()
+
+
+def _init_database() -> None:
+    """Create the SQLite database used for authentication."""
+
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(_DB_PATH)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user'
+            );
+
+            CREATE TABLE IF NOT EXISTS auth_tokens (
+                token TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _hash_password(password: str, salt: str) -> str:
+    """Derive a secure hash for ``password`` using ``salt``."""
+
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt.encode("utf-8"), 150_000
+    )
+    return digest.hex()
+
+
+def _create_user(email: str, password: str) -> User:
+    """Persist a new user in the database."""
+
+    user_id = uuid.uuid4().hex
+    salt = secrets.token_hex(16)
+    password_hash = _hash_password(password, salt)
+
+    conn = sqlite3.connect(_DB_PATH)
+    try:
+        conn.execute(
+            (
+                "INSERT INTO users (id, email, password_hash, salt) "
+                "VALUES (?, ?, ?, ?)"
+            ),
+            (user_id, email.lower(), password_hash, salt),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as exc:  # pragma: no cover - uniqueness guard
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered",
+        ) from exc
+    finally:
+        conn.close()
+
+    return User(id=user_id, email=email.lower(), role="user")
+
+
+def _get_user_by_email(email: str) -> Optional[sqlite3.Row]:
+    """Return the raw database row for ``email`` if present."""
+
+    conn = sqlite3.connect(_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        query = " ".join(
+            [
+                "SELECT id, email, role, password_hash, salt",
+                "FROM users WHERE email=?",
+            ]
+        )
+        cursor = conn.execute(query, (email.lower(),))
+        return cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def _authenticate_user(email: str, password: str) -> User:
+    """Validate credentials and return the authenticated user."""
+
+    row = _get_user_by_email(email)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+
+    expected = _hash_password(password, row["salt"])
+    if secrets.compare_digest(expected, row["password_hash"]) is False:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+
+    return User(id=row["id"], email=row["email"], role=row["role"])
+
+
+def _store_token(user: User) -> str:
+    """Create and persist a bearer token for ``user``."""
+
+    token = secrets.token_urlsafe(32)
+    now = dt.datetime.utcnow().isoformat()
+    conn = sqlite3.connect(_DB_PATH)
+    try:
+        conn.execute(
+            (
+                "INSERT INTO auth_tokens (token, user_id, created_at) "
+                "VALUES (?, ?, ?)"
+            ),
+            (token, user.id, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return token
+
+
+def _row_to_user(row: sqlite3.Row) -> User:
+    """Convert a database row into a :class:`User`."""
+
+    return User(id=row["id"], email=row["email"], role=row["role"])
+
+
+def _token_lookup(token: str) -> Optional[User]:
+    """Return the :class:`User` associated with ``token`` if valid."""
+
+    conn = sqlite3.connect(_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.execute(
+            """
+            SELECT users.id, users.email, users.role
+            FROM auth_tokens
+            JOIN users ON users.id = auth_tokens.user_id
+            WHERE auth_tokens.token = ?
+            """,
+            (token,),
+        )
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        return None
+    return _row_to_user(row)
+
+
+def _delete_token(token: str) -> None:
+    """Remove ``token`` from the database."""
+
+    conn = sqlite3.connect(_DB_PATH)
+    try:
+        conn.execute("DELETE FROM auth_tokens WHERE token = ?", (token,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _user_payload(user: User) -> UserResponse:
+    """Return a serialisable representation of ``user``."""
+
+    return UserResponse(id=user.id, email=user.email, role=user.role)
+
+
+def _parse_bearer_token(authorization: str) -> str:
+    """Extract the bearer token from the ``Authorization`` header."""
+
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Authorization header",
+        )
+
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Authorization header",
+        )
+    return parts[1]
+
+
+async def get_current_user(authorization: str = Header(...)) -> User:
+    """FastAPI dependency that resolves the authenticated user."""
+
+    token = _parse_bearer_token(authorization)
+    user = _token_lookup(token)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+    return user
+
+
+async def get_admin_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Ensure ``current_user`` has administrative privileges."""
+
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    return current_user
+
+
 
 # -----------------------------
 # Models
@@ -132,7 +404,7 @@ app.add_middleware(
 
 app.mount(
     "/reports",
-    StaticFiles(directory=_REPORTS_ROOT, html=False, check_dir=False),
+    StaticFiles(directory="./reports", html=False, check_dir=False),
     name="reports",
 )
 
@@ -487,274 +759,3 @@ if __name__ == "__main__":
         reload=reload_opt,
         log_level=os.getenv("APP_LOG_LEVEL", "info"),
     )
-# -----------------------------
-# Database & Auth helpers
-# -----------------------------
-
-
-@dataclass
-class User:
-    """Authenticated API consumer."""
-
-    id: str
-    email: str
-    role: str
-
-    @property
-    def is_admin(self) -> bool:
-        """Return ``True`` when the user has administrative permissions."""
-
-        return self.role.lower() == "admin"
-
-
-class UserResponse(BaseModel):
-    """Public user payload returned to clients."""
-
-    id: str
-    email: EmailStr
-    role: str
-
-
-class AuthResponse(BaseModel):
-    """Authentication payload containing a bearer token."""
-
-    access_token: str
-    token_type: str = "bearer"
-    user: UserResponse
-
-
-class SignUpRequest(BaseModel):
-    """Payload for registering a new user."""
-
-    email: EmailStr
-    password: str = Field(..., min_length=8)
-
-
-class LoginRequest(BaseModel):
-    """Payload for authenticating an existing user."""
-
-    email: EmailStr
-    password: str
-
-
-_PACKAGE_ROOT = Path(__file__).resolve().parent
-_DB_PATH = Path(os.getenv("AITOOL_DB_PATH", str(_PACKAGE_ROOT / "auth.db")))
-_REPORTS_ROOT = Path(
-    os.getenv("REPORTS_ROOT", str(_PACKAGE_ROOT / "reports"))
-).resolve()
-
-
-def _init_database() -> None:
-    """Create the SQLite database used for authentication."""
-
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(_DB_PATH)
-    try:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                salt TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'user'
-            );
-
-            CREATE TABLE IF NOT EXISTS auth_tokens (
-                token TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-            );
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _hash_password(password: str, salt: str) -> str:
-    """Derive a secure hash for ``password`` using ``salt``."""
-
-    digest = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), salt.encode("utf-8"), 150_000
-    )
-    return digest.hex()
-
-
-def _create_user(email: str, password: str) -> User:
-    """Persist a new user in the database."""
-
-    user_id = uuid.uuid4().hex
-    salt = secrets.token_hex(16)
-    password_hash = _hash_password(password, salt)
-
-    conn = sqlite3.connect(_DB_PATH)
-    try:
-        conn.execute(
-            (
-                "INSERT INTO users (id, email, password_hash, salt) "
-                "VALUES (?, ?, ?, ?)"
-            ),
-            (user_id, email.lower(), password_hash, salt),
-        )
-        conn.commit()
-    except sqlite3.IntegrityError as exc:  # pragma: no cover - uniqueness guard
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Email already registered",
-        ) from exc
-    finally:
-        conn.close()
-
-    return User(id=user_id, email=email.lower(), role="user")
-
-
-def _get_user_by_email(email: str) -> Optional[sqlite3.Row]:
-    """Return the raw database row for ``email`` if present."""
-
-    conn = sqlite3.connect(_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        query = " ".join(
-            [
-                "SELECT id, email, role, password_hash, salt",
-                "FROM users WHERE email=?",
-            ]
-        )
-        cursor = conn.execute(query, (email.lower(),))
-        return cursor.fetchone()
-    finally:
-        conn.close()
-
-
-def _authenticate_user(email: str, password: str) -> User:
-    """Validate credentials and return the authenticated user."""
-
-    row = _get_user_by_email(email)
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-        )
-
-    expected = _hash_password(password, row["salt"])
-    if secrets.compare_digest(expected, row["password_hash"]) is False:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-        )
-
-    return User(id=row["id"], email=row["email"], role=row["role"])
-
-
-def _store_token(user: User) -> str:
-    """Create and persist a bearer token for ``user``."""
-
-    token = secrets.token_urlsafe(32)
-    now = dt.datetime.utcnow().isoformat()
-    conn = sqlite3.connect(_DB_PATH)
-    try:
-        conn.execute(
-            (
-                "INSERT INTO auth_tokens (token, user_id, created_at) "
-                "VALUES (?, ?, ?)"
-            ),
-            (token, user.id, now),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return token
-
-
-def _row_to_user(row: sqlite3.Row) -> User:
-    """Convert a database row into a :class:`User`."""
-
-    return User(id=row["id"], email=row["email"], role=row["role"])
-
-
-def _token_lookup(token: str) -> Optional[User]:
-    """Return the :class:`User` associated with ``token`` if valid."""
-
-    conn = sqlite3.connect(_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        cursor = conn.execute(
-            """
-            SELECT users.id, users.email, users.role
-            FROM auth_tokens
-            JOIN users ON users.id = auth_tokens.user_id
-            WHERE auth_tokens.token = ?
-            """,
-            (token,),
-        )
-        row = cursor.fetchone()
-    finally:
-        conn.close()
-
-    if row is None:
-        return None
-    return _row_to_user(row)
-
-
-def _delete_token(token: str) -> None:
-    """Remove ``token`` from the database."""
-
-    conn = sqlite3.connect(_DB_PATH)
-    try:
-        conn.execute("DELETE FROM auth_tokens WHERE token = ?", (token,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _user_payload(user: User) -> UserResponse:
-    """Return a serialisable representation of ``user``."""
-
-    return UserResponse(id=user.id, email=user.email, role=user.role)
-
-
-def _parse_bearer_token(authorization: str) -> str:
-    """Extract the bearer token from the ``Authorization`` header."""
-
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header",
-        )
-
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Authorization header",
-        )
-    return parts[1]
-
-
-async def get_current_user(authorization: str = Header(...)) -> User:
-    """FastAPI dependency that resolves the authenticated user."""
-
-    token = _parse_bearer_token(authorization)
-    user = _token_lookup(token)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-        )
-    return user
-
-
-async def get_admin_user(
-    current_user: User = Depends(get_current_user),
-) -> User:
-    """Ensure ``current_user`` has administrative privileges."""
-
-    if not current_user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
-    return current_user

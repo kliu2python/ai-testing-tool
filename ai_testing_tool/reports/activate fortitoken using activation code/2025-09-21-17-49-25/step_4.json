@@ -1,0 +1,1 @@
+{"action": "wait", "timeout": 5000, "explanation": "I can see that the page is still loading, so I will wait a moment for the page to change or load.", "result": "success"}

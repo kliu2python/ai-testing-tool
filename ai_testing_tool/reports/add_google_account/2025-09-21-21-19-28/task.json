@@ -1,0 +1,1 @@
+{"name": "add_google_account", "details": "When you add a Google account in Passwords & accounts, username is abc@gmail.com, password is 123456. Then you should see an error \"Couldn't find your Google Account.\"", "scope": "functional", "skip": false, "steps": []}
