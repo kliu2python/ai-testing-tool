@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import signal
 from typing import Any, Dict, Optional
 
@@ -16,6 +15,7 @@ from task_queue import (
     queue_key,
     status_key,
 )
+from task_store import set_task_status
 
 
 def _update_status(
@@ -38,10 +38,16 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
     task: Dict[str, Any] = json.loads(raw_task)
     task_id = task["task_id"]
     owner_id: Optional[str] = task.get("user_id")
+    base_reports_folder = task.get("reports_folder") or "./reports"
     _update_status(redis_client, task_id, {"status": "running"}, owner_id)
+    set_task_status(
+        task_id,
+        "running",
+        user_id=owner_id,
+        reports_root=base_reports_folder,
+    )
 
-    reports_folder = task.get("reports_folder") or "./reports"
-    task_reports_folder = os.path.join(reports_folder, task_id)
+    reports_folder = base_reports_folder
 
     try:
         result = _run_tasks(
@@ -49,8 +55,9 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
             task["tasks"],
             task["server"],
             task["platform"],
-            task_reports_folder,
+            reports_folder,
             task["debug"],
+            task_id=task_id,
         )
     except Exception as exc:  # pragma: no cover - background safety net
         _update_status(
@@ -58,6 +65,13 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
             task_id,
             {"status": "failed", "error": str(exc)},
             owner_id,
+        )
+        set_task_status(
+            task_id,
+            "failed",
+            error=str(exc),
+            user_id=owner_id,
+            reports_root=base_reports_folder,
         )
         return
 
@@ -70,6 +84,14 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
             "summary_path": result.summary_path,
         },
         owner_id,
+    )
+    set_task_status(
+        task_id,
+        "completed",
+        summary=result.summary,
+        summary_path=result.summary_path,
+        user_id=owner_id,
+        reports_root=base_reports_folder,
     )
 
 

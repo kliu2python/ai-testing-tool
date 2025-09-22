@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +27,14 @@ from task_queue import (
     load_status,
     queue_key,
     status_key,
+)
+from task_store import (
+    delete_task_run,
+    ensure_task_tables,
+    list_task_runs_for_user,
+    load_task_run,
+    register_task_run,
+    set_task_status,
 )
 
 # -----------------------------
@@ -78,6 +86,7 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
+
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _DB_PATH = Path(os.getenv("AITOOL_DB_PATH", str(_PACKAGE_ROOT / "auth.db")))
 _REPORTS_ROOT = Path(
@@ -110,6 +119,7 @@ def _init_database() -> None:
             );
             """
         )
+        ensure_task_tables(conn)
         conn.commit()
     finally:
         conn.close()
@@ -299,7 +309,6 @@ async def get_admin_user(
             detail="Admin privileges required",
         )
     return current_user
-
 
 
 # -----------------------------
@@ -529,6 +538,14 @@ async def run_automation(
     payload["user_id"] = current_user.id
 
     try:
+        register_task_run(
+            task_id, current_user.id, request.reports_folder, request.tasks
+        )
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        message = f"Failed to persist task metadata: {exc}"
+        raise HTTPException(status_code=503, detail=message) from exc
+
+    try:
         await redis.set(
             status_key(task_id),
             dump_status(
@@ -560,20 +577,42 @@ async def _fetch_task_status(
             status_code=503, detail=f"Failed to read task status: {exc}"
         ) from exc
 
-    if raw_status is None:
+    if raw_status is not None:
+        data = load_status(raw_status)
+        owner_id = data.pop("user_id", None)
+        if owner_id is None and not current_user.is_admin:
+            raise HTTPException(status_code=403, detail="Task is not accessible")
+        if not current_user.is_admin and owner_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Task is not accessible")
+
+        return TaskStatusResponse(
+            task_id=task_id,
+            owner_id=owner_id,
+            **data,
+        )
+
+    record = load_task_run(task_id)
+    if record is None:
         raise HTTPException(status_code=404, detail="Unknown task id")
 
-    data = load_status(raw_status)
-    owner_id = data.pop("user_id", None)
+    owner_id = record.get("user_id")
     if owner_id is None and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Task is not accessible")
     if not current_user.is_admin and owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Task is not accessible")
 
+    try:
+        status_value = TaskStatus(record.get("status", TaskStatus.pending.value))
+    except ValueError as exc:  # pragma: no cover - defensive guard
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     return TaskStatusResponse(
         task_id=task_id,
+        status=status_value,
+        summary=record.get("summary"),
+        summary_path=record.get("summary_path"),
+        error=record.get("error"),
         owner_id=owner_id,
-        **data,
     )
 
 
@@ -588,6 +627,7 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
         "running": [],
         "error": [],
     }
+    seen: Set[str] = set()
 
     try:
         async for key in redis.scan_iter(match=f"{prefix}*"):
@@ -601,6 +641,7 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
 
             status_value = data.get("status")
             task_id = key.removeprefix(prefix)
+            seen.add(task_id)
 
             if status_value == TaskStatus.completed.value:
                 grouped["completed"].append(task_id)
@@ -615,6 +656,27 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
             status_code=503, detail=f"Failed to list tasks: {exc}"
         ) from exc
 
+    try:
+        records = list_task_runs_for_user(None if user.is_admin else user.id)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        raise HTTPException(
+            status_code=503, detail=f"Failed to load stored tasks: {exc}"
+        ) from exc
+
+    for record in records:
+        task_id = record["id"]
+        if task_id in seen:
+            continue
+        status_value = record.get("status", TaskStatus.pending.value)
+        if status_value == TaskStatus.completed.value:
+            grouped["completed"].append(task_id)
+        elif status_value == TaskStatus.pending.value:
+            grouped["pending"].append(task_id)
+        elif status_value == TaskStatus.running.value:
+            grouped["running"].append(task_id)
+        elif status_value == TaskStatus.failed.value:
+            grouped["error"].append(task_id)
+
     return TaskCollectionResponse(**grouped)
 
 
@@ -622,7 +684,7 @@ def _step_candidates(directory: Path) -> Iterable[Path]:
     """Yield potential screenshot files from ``directory``."""
 
     for extension in ("png", "jpg", "jpeg"):
-        yield from directory.rglob(f"step_*.{extension}")
+        yield from directory.rglob(f"step*.{extension}")
 
 
 def _build_step_images(summary_path: Optional[str]) -> List[StepInfo]:
@@ -644,7 +706,7 @@ def _build_step_images(summary_path: Optional[str]) -> List[StepInfo]:
     for candidate in _step_candidates(directory):
         if not candidate.is_file():
             continue
-        match = re.search(r"step_(\d+)", candidate.name)
+        match = re.search(r"step(\d+)", candidate.name)
         if not match:
             continue
         index = int(match.group(1))
@@ -736,6 +798,13 @@ async def delete_task(
     except Exception as exc:  # pragma: no cover - operational failure
         raise HTTPException(
             status_code=503, detail=f"Failed to delete task: {exc}"
+        ) from exc
+
+    try:
+        delete_task_run(task_id)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        raise HTTPException(
+            status_code=503, detail=f"Failed to purge stored task: {exc}"
         ) from exc
 
 

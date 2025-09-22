@@ -551,10 +551,12 @@ def _run_tasks(
     platform: str,
     reports_folder: str,
     debug: bool = False,
+    task_id: Optional[str] = None,
 ) -> RunResult:
     """Execute tasks using the configured automation server."""
 
     create_folder(reports_folder)
+    run_identifier = task_id or get_current_timestamp()
     driver = create_driver(server, platform)
     driver.implicitly_wait(0.2)
     thread = threading.Thread(target=lambda: keep_driver_live(driver), daemon=True)
@@ -575,18 +577,23 @@ def _run_tasks(
                 print(f"skip {name}")
                 continue
 
-            task_folder = create_folder(
-                f"{reports_folder}/{name}/{get_current_timestamp()}"
-            )
+            reports_path = os.path.join(reports_folder, name, run_identifier)
+            task_folder = create_folder(reports_path)
             write_to_file(f"{task_folder}/task.json", json.dumps(task))
             sleep(1)
-            page_source_for_next_step = take_page_source(driver, task_folder, "step_0")
+            page_source_for_next_step = take_page_source(driver, task_folder, "step0")
             page_screenshot_for_next_step = take_screenshot(
-                driver, task_folder, "step_0"
+                driver, task_folder, "step0"
             )
             history_actions: List[str] = []
             step = 0
-            task_result = {"name": name, "scope": scope, "steps": []}
+            task_result = {
+                "name": name,
+                "scope": scope,
+                "steps": [],
+                "reports_path": os.path.normpath(reports_path).replace("\\", "/"),
+                "task_id": run_identifier,
+            }
 
             if steps:
                 for step_action in steps:
@@ -597,10 +604,10 @@ def _run_tasks(
                         page_screenshot_for_next_step,
                         next_action_with_result,
                     ) = process_next_action(
-                        next_action, driver, task_folder, f"step_{step}"
+                        next_action, driver, task_folder, f"step{step}"
                     )
                     write_to_file(
-                        f"{task_folder}/step_{step}.json",
+                        f"{task_folder}/step{step}.json",
                         next_action_with_result,
                     )
                     task_result["steps"].append(json.loads(next_action_with_result))
@@ -615,7 +622,7 @@ def _run_tasks(
                         f"# Source of Page \n ```yaml\n {page_source} \n```",
                     ]
                     write_to_file(
-                        f"{task_folder}/step_{step}_prompt.md",
+                        f"{task_folder}/step{step}_prompt.md",
                         "\n".join(prompts),
                     )
 
@@ -637,10 +644,10 @@ def _run_tasks(
                         page_screenshot_for_next_step,
                         next_action_with_result,
                     ) = process_next_action(
-                        next_action, driver, task_folder, f"step_{step}"
+                        next_action, driver, task_folder, f"step{step}"
                     )
                     write_to_file(
-                        f"{task_folder}/step_{step}.json",
+                        f"{task_folder}/step{step}.json",
                         next_action_with_result,
                     )
                     history_actions.append(next_action_with_result)
@@ -648,7 +655,11 @@ def _run_tasks(
 
             summary.append(task_result)
 
-        summary_path = generate_summary_report(reports_folder, summary)
+        if summary:
+            summary_folder = os.path.join(
+                reports_folder, summary[0]["name"], run_identifier
+            )
+            summary_path = generate_summary_report(summary_folder, summary)
     finally:
         driver.quit()
 
@@ -662,10 +673,19 @@ def run_tasks(
     platform: str,
     reports_folder: str,
     debug: bool = False,
+    task_id: Optional[str] = None,
 ) -> RunResult:
     """Run tasks synchronously (backwards compatible helper)."""
 
-    return _run_tasks(prompt, tasks, server, platform, reports_folder, debug)
+    return _run_tasks(
+        prompt,
+        tasks,
+        server,
+        platform,
+        reports_folder,
+        debug,
+        task_id=task_id,
+    )
 
 
 async def run_tasks_async(
@@ -675,6 +695,7 @@ async def run_tasks_async(
     platform: str,
     reports_folder: str,
     debug: bool = False,
+    task_id: Optional[str] = None,
 ) -> RunResult:
     """Run tasks in a shared background executor for concurrency."""
 
@@ -688,6 +709,7 @@ async def run_tasks_async(
         platform,
         reports_folder,
         debug,
+        task_id,
     )
     return await loop.run_in_executor(executor, func)
 
