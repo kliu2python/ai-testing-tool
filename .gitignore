@@ -8,3 +8,5 @@ venv/
 node_modules/
 frontend/node_modules/
 frontend/dist/
+backend_server/reports/
+backend_server/*.db
