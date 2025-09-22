@@ -17,10 +17,18 @@ from task_queue import (
 )
 
 
-def _update_status(redis_client: Any, task_id: str, payload: Dict[str, Any]) -> None:
+def _update_status(
+    redis_client: Any,
+    task_id: str,
+    payload: Dict[str, Any],
+    owner_id: Optional[str],
+) -> None:
     """Persist ``payload`` as the status for ``task_id``."""
 
-    redis_client.set(status_key(task_id), dump_status(payload))
+    data = dict(payload)
+    if owner_id is not None:
+        data["user_id"] = owner_id
+    redis_client.set(status_key(task_id), dump_status(data))
 
 
 def _process_task(redis_client: Any, raw_task: str) -> None:
@@ -28,7 +36,8 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
 
     task: Dict[str, Any] = json.loads(raw_task)
     task_id = task["task_id"]
-    _update_status(redis_client, task_id, {"status": "running"})
+    owner_id: Optional[str] = task.get("user_id")
+    _update_status(redis_client, task_id, {"status": "running"}, owner_id)
 
     try:
         result = _run_tasks(
@@ -44,6 +53,7 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
             redis_client,
             task_id,
             {"status": "failed", "error": str(exc)},
+            owner_id,
         )
         return
 
@@ -55,6 +65,7 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
             "summary": result.summary,
             "summary_path": result.summary_path,
         },
+        owner_id,
     )
 
 

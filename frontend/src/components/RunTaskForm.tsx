@@ -11,7 +11,11 @@ import {
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 
 import { apiRequest, formatPayload } from "../api";
-import type { NotificationState, RunTaskPayload } from "../types";
+import type {
+  NotificationState,
+  RunResponse,
+  RunTaskPayload
+} from "../types";
 import JsonOutput from "./JsonOutput";
 
 const SAMPLE_TASKS = JSON.stringify(
@@ -27,10 +31,15 @@ const SAMPLE_TASKS = JSON.stringify(
 
 interface RunTaskFormProps {
   baseUrl: string;
+  token: string | null;
   onNotify: (notification: NotificationState) => void;
 }
 
-export default function RunTaskForm({ baseUrl, onNotify }: RunTaskFormProps) {
+export default function RunTaskForm({
+  baseUrl,
+  token,
+  onNotify
+}: RunTaskFormProps) {
   const [prompt, setPrompt] = useState(
     "Describe the tasks for the automation agent."
   );
@@ -43,6 +52,14 @@ export default function RunTaskForm({ baseUrl, onNotify }: RunTaskFormProps) {
   const [response, setResponse] = useState("");
 
   async function handleSubmit() {
+    if (!token) {
+      onNotify({
+        message: "Log in to submit automation tasks",
+        severity: "warning"
+      });
+      return;
+    }
+
     let tasks: unknown[];
     try {
       const parsed = tasksJson ? JSON.parse(tasksJson) : [];
@@ -67,7 +84,13 @@ export default function RunTaskForm({ baseUrl, onNotify }: RunTaskFormProps) {
     };
 
     setSubmitting(true);
-    const result = await apiRequest(baseUrl, "post", "/run", payload);
+    const result = await apiRequest<RunResponse>(
+      baseUrl,
+      "post",
+      "/run",
+      payload,
+      token
+    );
     setSubmitting(false);
 
     if (result.ok) {

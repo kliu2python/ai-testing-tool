@@ -3,22 +3,31 @@ import type { ApiResult } from "./types";
 
 export const API_BASE_DEFAULT = "http://localhost:8090";
 
+type HttpMethod = "get" | "post" | "delete" | "patch";
+
 export async function apiRequest<T = unknown>(
   baseUrl: string,
-  method: "get" | "post",
+  method: HttpMethod,
   path: string,
-  payload?: unknown
+  payload?: unknown,
+  token?: string | null
 ): Promise<ApiResult<T>> {
   const client = axios.create({
     baseURL: baseUrl.replace(/\/$/, ""),
     headers: { "Content-Type": "application/json" }
   });
 
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   try {
     const response = await client.request<T>({
       url: path,
       method,
-      data: payload
+      data: payload,
+      headers
     });
     return {
       ok: true,
