@@ -298,7 +298,6 @@ export default function RunTaskForm({
       >
         Submit Run Request
       </Button>
-      <JsonOutput title="Run API Response" content={response} />
     </Stack>
   );
 }

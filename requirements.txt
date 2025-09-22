@@ -7,3 +7,4 @@ fastapi
 uvicorn
 redis
 httpx
+pydantic[email]

@@ -1,26 +1,34 @@
 # syntax=docker/dockerfile:1
-FROM python:3.10-slim AS base
+FROM python:3.10-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+# This is your "cd"
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        libjpeg62-turbo-dev \
-        zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends \
+      build-essential \
+      libjpeg62-turbo-dev \
+      zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# If you want --reload to work reliably inside Docker:
+# RUN pip install --no-cache-dir "uvicorn[standard]"  # includes watchfiles
 
+# Copy your package into /app/backend_server
 COPY backend_server ./backend_server
-COPY backend_server.py ./
 
+# Make sure Python can import from /app
+ENV PYTHONPATH=/app
 ENV PYTHONPATH=/app
 
-EXPOSE 8000
+WORKDIR /app
 
-CMD ["uvicorn", "backend_server.api:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8090
+
+# WORKDIR already puts us in /app; api.py is under backend_server/api.py
+CMD ["uvicorn", "backend_server.api:app", "--host", "0.0.0.0", "--port", "8090", "--reload"]

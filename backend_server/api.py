@@ -21,14 +21,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 from redis.asyncio import Redis
 
-from task_queue import (
+from backend_server.task_queue import (
     create_async_redis_client,
     dump_status,
     load_status,
     queue_key,
     status_key,
 )
-from task_store import (
+from backend_server.task_store import (
     delete_task_run,
     ensure_task_tables,
     list_task_runs_for_user,

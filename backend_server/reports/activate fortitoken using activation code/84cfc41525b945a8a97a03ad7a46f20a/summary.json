@@ -1,0 +1,54 @@
+[
+  {
+    "name": "activate fortitoken using activation code",
+    "scope": "functional",
+    "steps": [
+      {
+        "action": "tap",
+        "bounds": "[160,543][310,591]",
+        "explanation": "To activate a token using the provided code, I need to enter it manually. The 'ENTER MANUALLY' button is visible on the screen, so I will tap it to proceed with entering the activation code.",
+        "result": "success"
+      },
+      {
+        "action": "tap",
+        "bounds": "[0,118][320,174]",
+        "explanation": "To activate a token using the provided code, I need to select the Fortinet account. The 'Fortinet' option is visible on the screen, so I will tap it to proceed with the activation process.",
+        "result": "success"
+      },
+      {
+        "action": "input",
+        "bounds": "[10,138][310,185]",
+        "value": "ai token",
+        "explanation": "I need to input the name 'ai token' for the new account. The input box for the name is visible on the screen, so I will tap it and input the name.",
+        "result": "success"
+      },
+      {
+        "action": "input",
+        "bounds": "[10,190][310,237]",
+        "value": "GEAD2IZEHWDN2SLTTWIMMFX4FDUFZUSRKGBSL6NUEHTA3IRB6DAG77HOFUCCSFW4",
+        "explanation": "I need to input the activation code 'GEAD2IZEHWDN2SLTTWIMMFX4FDUFZUSRKGBSL6NUEHTA3IRB6DAG77HOFUCCSFW4' in the 'Key' field to activate the token. The input box for the key is visible on the screen, so I will tap it and input the activation code.",
+        "result": "success"
+      },
+      {
+        "action": "tap",
+        "bounds": "[10,252][310,300]",
+        "explanation": "I need to tap the 'ADD ACCOUNT' button to complete the activation process. The button is visible on the screen, so I will tap it to proceed.",
+        "result": "success"
+      },
+      {
+        "action": "wait",
+        "timeout": 5000,
+        "explanation": "The screen is displaying a loading message, indicating that the activation process is in progress. I will wait for the process to complete.",
+        "result": "success"
+      },
+      {
+        "action": "error",
+        "message": "The token has expired and requires a new one from the administrator.",
+        "explanation": "The activation process has failed due to an expired token. The error message indicates that a new token must be obtained from the administrator before retrying the activation process.",
+        "result": "success"
+      }
+    ],
+    "reports_path": "reports/activate fortitoken using activation code/84cfc41525b945a8a97a03ad7a46f20a",
+    "task_id": "84cfc41525b945a8a97a03ad7a46f20a"
+  }
+]

@@ -10,7 +10,7 @@ from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 
 
-DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+DEFAULT_REDIS_URL = "redis://10.160.13.110:6379/0"
 _QUEUE_KEY_ENV = "AITASK_QUEUE_KEY"
 _STATUS_PREFIX_ENV = "AITASK_STATUS_PREFIX"
 

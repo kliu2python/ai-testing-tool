@@ -142,10 +142,7 @@ export default function App() {
           <Toolbar sx={{ gap: 2 }}>
             <Box sx={{ display: "flex", flexDirection: "column" }}>
               <Typography variant="h5" component="h1">
-                AI Testing Tool Frontend
-              </Typography>
-              <Typography variant="body2" sx={{ opacity: 0.85 }}>
-                Interact with the FastAPI backend using a modern React interface.
+                FTNT QA AI Test Portal
               </Typography>
             </Box>
             <Box sx={{ flexGrow: 1 }} />
