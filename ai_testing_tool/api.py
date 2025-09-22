@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import json
 import os
+import uuid
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from redis.asyncio import Redis
 
-from runner import RunResult, run_tasks_async
+from task_queue import (
+    create_async_redis_client,
+    dump_status,
+    load_status,
+    queue_key,
+    status_key,
+)
 
 
 # -----------------------------
@@ -50,10 +59,28 @@ class RunRequest(BaseModel):
 
 
 class RunResponse(BaseModel):
-    """Response payload containing aggregated run results."""
+    """Response payload containing the queued task identifier."""
 
-    summary: List[Dict[str, Any]]
-    summary_path: str
+    task_id: str
+
+
+class TaskStatus(str, Enum):
+    """Possible lifecycle states for a queued task."""
+
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+class TaskStatusResponse(BaseModel):
+    """Status payload returned when querying for a task."""
+
+    task_id: str
+    status: TaskStatus
+    summary: Optional[List[Dict[str, Any]]] = None
+    summary_path: Optional[str] = None
+    error: Optional[str] = None
 
 
 # -----------------------------
@@ -73,6 +100,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def _init_redis() -> None:
+    """Create a shared Redis client for request handlers."""
+
+    app.state.redis = create_async_redis_client()
+
+
+@app.on_event("shutdown")
+async def _close_redis() -> None:
+    """Dispose of the Redis client on shutdown."""
+
+    redis: Optional[Redis] = getattr(app.state, "redis", None)
+    if redis is not None:
+        await redis.close()
+
+
+def _redis_client() -> Redis:
+    """Return the application-wide Redis client instance."""
+
+    redis: Optional[Redis] = getattr(app.state, "redis", None)
+    if redis is None:
+        raise HTTPException(status_code=503, detail="Redis client is unavailable")
+    return redis
 
 
 @app.on_event("startup")
@@ -96,20 +148,69 @@ def read_root() -> Dict[str, str]:
 
 @app.post("/run", response_model=RunResponse, summary="Run automation tasks")
 async def run_automation(request: RunRequest) -> RunResponse:
-    """Execute automation tasks using the provided configuration."""
-    try:
-        result: RunResult = await run_tasks_async(
-            request.prompt,
-            request.tasks,
-            request.server,
-            request.platform.value,
-            request.reports_folder,
-            request.debug,
-        )
-    except Exception as exc:  # pragma: no cover - propagate failure details
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    """Enqueue automation tasks to be executed by the background runner."""
 
-    return RunResponse(summary=result.summary, summary_path=result.summary_path)
+    redis = _redis_client()
+    task_id = uuid.uuid4().hex
+    payload = request.dict()
+    payload["task_id"] = task_id
+
+    try:
+        await redis.set(
+            status_key(task_id),
+            dump_status({"status": TaskStatus.pending.value}),
+        )
+        await redis.rpush(queue_key(), json.dumps(payload))
+    except Exception as exc:  # pragma: no cover - operational failure propagation
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to enqueue task: {exc}",
+        ) from exc
+
+    return RunResponse(task_id=task_id)
+
+
+async def _fetch_task_status(task_id: str) -> TaskStatusResponse:
+    """Load the task status payload from Redis and validate it."""
+
+    redis = _redis_client()
+    try:
+        raw_status = await redis.get(status_key(task_id))
+    except Exception as exc:  # pragma: no cover - operational failure propagation
+        raise HTTPException(
+            status_code=503, detail=f"Failed to read task status: {exc}"
+        ) from exc
+
+    if raw_status is None:
+        raise HTTPException(status_code=404, detail="Unknown task id")
+
+    data = load_status(raw_status)
+    return TaskStatusResponse(task_id=task_id, **data)
+
+
+@app.get(
+    "/tasks/{task_id}",
+    response_model=TaskStatusResponse,
+    summary="Retrieve current task status",
+)
+async def get_task_status(task_id: str) -> TaskStatusResponse:
+    """Return the latest status information for ``task_id``."""
+
+    return await _fetch_task_status(task_id)
+
+
+@app.get(
+    "/tasks/{task_id}/result",
+    response_model=TaskStatusResponse,
+    summary="Retrieve final task result",
+)
+async def get_task_result(task_id: str) -> TaskStatusResponse:
+    """Return the final result once the task has completed."""
+
+    status = await _fetch_task_status(task_id)
+    if status.status in {TaskStatus.pending, TaskStatus.running}:
+        raise HTTPException(status_code=202, detail="Task is still in progress")
+    return status
 
 
 # -----------------------------
