@@ -1,6 +1,5 @@
-import { ChangeEvent, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  Box,
   IconButton,
   Paper,
   Stack,
@@ -23,10 +22,9 @@ export default function JsonOutput({
   minHeight = 180
 }: JsonOutputProps) {
   const [copied, setCopied] = useState(false);
-  const [fontSize, setFontSize] = useState(13);
-
-  const MIN_FONT_SIZE = 10;
-  const MAX_FONT_SIZE = 48;
+  const minRows = useMemo(() => Math.max(3, Math.floor(minHeight / 24)), [
+    minHeight
+  ]);
 
   async function handleCopy() {
     if (!content || !navigator.clipboard) {
@@ -41,72 +39,53 @@ export default function JsonOutput({
     }
   }
 
-  function handleFontSizeChange(event: ChangeEvent<HTMLInputElement>) {
-    const value = Number(event.target.value);
-
-    if (Number.isNaN(value)) {
-      return;
-    }
-
-    const clampedValue = Math.min(Math.max(value, MIN_FONT_SIZE), MAX_FONT_SIZE);
-    setFontSize(clampedValue);
-  }
-
   return (
     <Paper variant="outlined">
-      <Stack spacing={1} p={2} height={minHeight}>
+      <Stack spacing={1} p={2} minHeight={minHeight}>
         <Stack direction="row" alignItems="center" justifyContent="space-between">
           <Typography variant="subtitle1" fontWeight={600}>
             {title}
           </Typography>
-          <Stack direction="row" spacing={0.5} alignItems="center">
-            <TextField
-              label="Font size"
-              size="small"
-              type="number"
-              value={fontSize}
-              onChange={handleFontSizeChange}
-              inputProps={{
-                min: MIN_FONT_SIZE,
-                max: MAX_FONT_SIZE,
-                step: 1
-              }}
-              sx={{ width: 110 }}
-            />
-            <Tooltip title={copied ? "Copied" : "Copy"} placement="left">
-              <span>
-                <IconButton
-                  aria-label="copy-json"
-                  size="small"
-                  disabled={!content}
-                  onClick={handleCopy}
-                >
-                  {copied ? (
-                    <CheckIcon fontSize="small" />
-                  ) : (
-                    <ContentCopyIcon fontSize="small" />
-                  )}
-                </IconButton>
-              </span>
-            </Tooltip>
-          </Stack>
+          <Tooltip title={copied ? "Copied" : "Copy"} placement="left">
+            <span>
+              <IconButton
+                aria-label="copy-json"
+                size="small"
+                disabled={!content}
+                onClick={handleCopy}
+              >
+                {copied ? (
+                  <CheckIcon fontSize="small" />
+                ) : (
+                  <ContentCopyIcon fontSize="small" />
+                )}
+              </IconButton>
+            </span>
+          </Tooltip>
         </Stack>
-        <Box
-          component="pre"
+        <TextField
+          value={content}
+          placeholder="No data"
+          multiline
+          minRows={minRows}
+          fullWidth
+          InputProps={{ readOnly: true }}
           sx={{
             flexGrow: 1,
-            m: 0,
-            p: 1.5,
-            bgcolor: "grey.100",
-            borderRadius: 1,
-            overflow: "auto",
-            fontFamily: "Roboto Mono, monospace",
-            fontSize,
-            lineHeight: 1.5
+            "& .MuiInputBase-root": {
+              alignItems: "flex-start",
+              bgcolor: "grey.100",
+              borderRadius: 1,
+              p: 1.5,
+              fontFamily: "Roboto Mono, monospace",
+              fontSize: 13,
+              lineHeight: 1.5
+            },
+            "& textarea": {
+              resize: "vertical"
+            }
           }}
-        >
-          {content || "No data"}
-        </Box>
+        />
       </Stack>
     </Paper>
   );
