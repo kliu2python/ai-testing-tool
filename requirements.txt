@@ -7,4 +7,3 @@ fastapi
 uvicorn
 redis
 httpx
-nicegui
