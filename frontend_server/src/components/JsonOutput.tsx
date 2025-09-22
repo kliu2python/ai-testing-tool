@@ -9,6 +9,8 @@ import {
 } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import CheckIcon from "@mui/icons-material/CheckCircle";
+import ZoomInIcon from "@mui/icons-material/ZoomIn";
+import ZoomOutIcon from "@mui/icons-material/ZoomOut";
 
 interface JsonOutputProps {
   title: string;
@@ -22,6 +24,10 @@ export default function JsonOutput({
   minHeight = 180
 }: JsonOutputProps) {
   const [copied, setCopied] = useState(false);
+  const [fontSize, setFontSize] = useState(13);
+
+  const canZoomIn = fontSize < 24;
+  const canZoomOut = fontSize > 10;
 
   async function handleCopy() {
     if (!content || !navigator.clipboard) {
@@ -36,6 +42,14 @@ export default function JsonOutput({
     }
   }
 
+  function handleZoomIn() {
+    setFontSize((size) => Math.min(size + 2, 24));
+  }
+
+  function handleZoomOut() {
+    setFontSize((size) => Math.max(size - 2, 10));
+  }
+
   return (
     <Paper variant="outlined">
       <Stack spacing={1} p={2} height={minHeight}>
@@ -43,18 +57,48 @@ export default function JsonOutput({
           <Typography variant="subtitle1" fontWeight={600}>
             {title}
           </Typography>
-          <Tooltip title={copied ? "Copied" : "Copy"} placement="left">
-            <span>
-              <IconButton
-                aria-label="copy-json"
-                size="small"
-                disabled={!content}
-                onClick={handleCopy}
-              >
-                {copied ? <CheckIcon fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
-              </IconButton>
-            </span>
-          </Tooltip>
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Tooltip title="Zoom out" placement="left">
+              <span>
+                <IconButton
+                  aria-label="zoom-out"
+                  size="small"
+                  onClick={handleZoomOut}
+                  disabled={!canZoomOut}
+                >
+                  <ZoomOutIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Zoom in" placement="left">
+              <span>
+                <IconButton
+                  aria-label="zoom-in"
+                  size="small"
+                  onClick={handleZoomIn}
+                  disabled={!canZoomIn}
+                >
+                  <ZoomInIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title={copied ? "Copied" : "Copy"} placement="left">
+              <span>
+                <IconButton
+                  aria-label="copy-json"
+                  size="small"
+                  disabled={!content}
+                  onClick={handleCopy}
+                >
+                  {copied ? (
+                    <CheckIcon fontSize="small" />
+                  ) : (
+                    <ContentCopyIcon fontSize="small" />
+                  )}
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Stack>
         </Stack>
         <Box
           component="pre"
@@ -66,7 +110,8 @@ export default function JsonOutput({
             borderRadius: 1,
             overflow: "auto",
             fontFamily: "Roboto Mono, monospace",
-            fontSize: 13
+            fontSize,
+            lineHeight: 1.5
           }}
         >
           {content || "No data"}
