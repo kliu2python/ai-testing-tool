@@ -5,3 +5,4 @@ pyyaml
 selenium
 fastapi
 uvicorn
+redis
