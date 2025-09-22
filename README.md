@@ -38,7 +38,7 @@ requirements and launch the API with Uvicorn:
 
 ```sh
 pip install -r requirements.txt
-uvicorn ai_testing_tool.api:app --host 0.0.0.0 --port 8000
+uvicorn ai_testing_tool.api:app --host 0.0.0.0 --port 8090
 ```
 
 The server listens on all interfaces so that it can be reached from remote
@@ -46,7 +46,7 @@ clients. Trigger a run by sending a `POST` request to `/run` with the prompt,
 tasks, and configuration:
 
 ```sh
-curl -X POST "http://<server-ip>:8000/run" \
+curl -X POST "http://<server-ip>:8090/run" \
   -H "Content-Type: application/json" \
   -d '{
         "prompt": "<system prompt text>",
@@ -59,6 +59,34 @@ curl -X POST "http://<server-ip>:8000/run" \
 
 The response returns the aggregated summary along with the path to the generated
 `summary.json` report inside the reports directory.
+
+## Web Frontend
+
+A modern React and TypeScript frontend is available in the `frontend/` directory.
+It uses [Vite](https://vitejs.dev/) and Material UI components to interact with the
+FastAPI service.
+
+### Running the frontend
+
+```sh
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0 --port 5173
+```
+
+Then open [http://localhost:5173](http://localhost:5173) in your browser. The UI
+lets you configure the API base URL (default `http://localhost:8090`), trigger
+new automation runs, inspect queued tasks, and fetch results.
+
+For production builds you can run:
+
+```sh
+npm run build
+```
+
+which outputs static assets in `frontend/dist/`. Use `npm run preview` to test the
+production build locally.
+
 
 ## Acknowledgements
 
