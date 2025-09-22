@@ -6,3 +6,5 @@ selenium
 fastapi
 uvicorn
 redis
+httpx
+nicegui
