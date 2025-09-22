@@ -1,16 +1,15 @@
-import { useState } from "react";
+import { ChangeEvent, useState } from "react";
 import {
   Box,
   IconButton,
   Paper,
   Stack,
+  TextField,
   Tooltip,
   Typography
 } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import CheckIcon from "@mui/icons-material/CheckCircle";
-import ZoomInIcon from "@mui/icons-material/ZoomIn";
-import ZoomOutIcon from "@mui/icons-material/ZoomOut";
 
 interface JsonOutputProps {
   title: string;
@@ -26,8 +25,8 @@ export default function JsonOutput({
   const [copied, setCopied] = useState(false);
   const [fontSize, setFontSize] = useState(13);
 
-  const canZoomIn = fontSize < 24;
-  const canZoomOut = fontSize > 10;
+  const MIN_FONT_SIZE = 10;
+  const MAX_FONT_SIZE = 48;
 
   async function handleCopy() {
     if (!content || !navigator.clipboard) {
@@ -42,12 +41,15 @@ export default function JsonOutput({
     }
   }
 
-  function handleZoomIn() {
-    setFontSize((size) => Math.min(size + 2, 24));
-  }
+  function handleFontSizeChange(event: ChangeEvent<HTMLInputElement>) {
+    const value = Number(event.target.value);
 
-  function handleZoomOut() {
-    setFontSize((size) => Math.max(size - 2, 10));
+    if (Number.isNaN(value)) {
+      return;
+    }
+
+    const clampedValue = Math.min(Math.max(value, MIN_FONT_SIZE), MAX_FONT_SIZE);
+    setFontSize(clampedValue);
   }
 
   return (
@@ -58,30 +60,19 @@ export default function JsonOutput({
             {title}
           </Typography>
           <Stack direction="row" spacing={0.5} alignItems="center">
-            <Tooltip title="Zoom out" placement="left">
-              <span>
-                <IconButton
-                  aria-label="zoom-out"
-                  size="small"
-                  onClick={handleZoomOut}
-                  disabled={!canZoomOut}
-                >
-                  <ZoomOutIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Tooltip title="Zoom in" placement="left">
-              <span>
-                <IconButton
-                  aria-label="zoom-in"
-                  size="small"
-                  onClick={handleZoomIn}
-                  disabled={!canZoomIn}
-                >
-                  <ZoomInIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
+            <TextField
+              label="Font size"
+              size="small"
+              type="number"
+              value={fontSize}
+              onChange={handleFontSizeChange}
+              inputProps={{
+                min: MIN_FONT_SIZE,
+                max: MAX_FONT_SIZE,
+                step: 1
+              }}
+              sx={{ width: 110 }}
+            />
             <Tooltip title={copied ? "Copied" : "Copy"} placement="left">
               <span>
                 <IconButton
