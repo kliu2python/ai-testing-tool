@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Alert,
+  AppBar,
   Box,
+  Button,
   Chip,
   Container,
   CssBaseline,
@@ -11,6 +13,7 @@ import {
   Stack,
   Tab,
   Tabs,
+  Toolbar,
   Typography
 } from "@mui/material";
 import { ThemeProvider } from "@mui/material/styles";
@@ -63,6 +66,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const authPanelRef = useRef<HTMLDivElement | null>(null);
 
   const showNotification = useCallback((update: NotificationState) => {
     setNotification(update);
@@ -87,6 +92,17 @@ export default function App() {
       console.warn("Failed to parse stored authentication", error);
       localStorage.removeItem(AUTH_STORAGE_KEY);
     }
+  }, []);
+
+  const handleAuthNavigation = useCallback((mode: "login" | "signup") => {
+    setAuthMode(mode);
+    setActiveTab(0);
+    requestAnimationFrame(() => {
+      authPanelRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    });
   }, []);
 
   const handleLogin = useCallback(
@@ -121,74 +137,113 @@ export default function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Container sx={{ py: 4 }}>
-        <Stack spacing={4}>
-          <Stack spacing={1}>
-            <Typography variant="h3" component="h1" gutterBottom>
-              AI Testing Tool Frontend
-            </Typography>
-            <Typography variant="subtitle1" color="text.secondary">
-              Interact with the FastAPI backend using a modern React interface.
-            </Typography>
+      <Box sx={{ bgcolor: "background.default", minHeight: "100vh" }}>
+        <AppBar position="static" color="primary" enableColorOnDark>
+          <Toolbar sx={{ gap: 2 }}>
+            <Box sx={{ display: "flex", flexDirection: "column" }}>
+              <Typography variant="h5" component="h1">
+                AI Testing Tool Frontend
+              </Typography>
+              <Typography variant="body2" sx={{ opacity: 0.85 }}>
+                Interact with the FastAPI backend using a modern React interface.
+              </Typography>
+            </Box>
+            <Box sx={{ flexGrow: 1 }} />
             <Chip
               label={
                 user
-                  ? `Authenticated as ${user.email} (${user.role})`
+                  ? `Signed in as ${user.email} (${user.role})`
                   : "Not authenticated"
               }
               color={user ? "success" : "default"}
               variant={user ? "filled" : "outlined"}
+              sx={{ mr: user ? 1.5 : 2 }}
             />
+            {user ? (
+              <Button color="inherit" onClick={handleLogout}>
+                Log Out
+              </Button>
+            ) : (
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Button
+                  color="inherit"
+                  onClick={() => handleAuthNavigation("login")}
+                >
+                  Log In
+                </Button>
+                <Button
+                  color="inherit"
+                  variant="outlined"
+                  onClick={() => handleAuthNavigation("signup")}
+                  sx={{
+                    borderColor: "rgba(255, 255, 255, 0.7)",
+                    "&:hover": {
+                      borderColor: "rgba(255, 255, 255, 0.9)"
+                    }
+                  }}
+                >
+                  Sign Up
+                </Button>
+              </Stack>
+            )}
+          </Toolbar>
+        </AppBar>
+        <Container sx={{ py: 4 }}>
+          <Stack spacing={4}>
+            <Tabs
+              value={activeTab}
+              onChange={(_event, value) => setActiveTab(value)}
+              aria-label="Application navigation"
+              variant="scrollable"
+              scrollButtons="auto"
+            >
+              <Tab label="Health" {...tabProps(0)} />
+              <Tab label="Run Tasks" disabled={!token} {...tabProps(1)} />
+              <Tab label="Results" disabled={!token} {...tabProps(2)} />
+            </Tabs>
+            <TabPanel value={activeTab} index={0}>
+              <Grid container spacing={3}>
+                <Grid item xs={12} md={6}>
+                  <ApiConfigPanel
+                    baseUrl={baseUrl}
+                    onBaseUrlChange={setBaseUrl}
+                    onNotify={showNotification}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Box ref={authPanelRef}>
+                    <AuthPanel
+                      baseUrl={baseUrl}
+                      token={token}
+                      user={user}
+                      onLogin={handleLogin}
+                      onLogout={handleLogout}
+                      onNotify={showNotification}
+                      activeMode={authMode}
+                      onModeChange={setAuthMode}
+                    />
+                  </Box>
+                </Grid>
+              </Grid>
+            </TabPanel>
+            <TabPanel value={activeTab} index={1}>
+              <RunTaskForm
+                baseUrl={baseUrl}
+                token={token}
+                onNotify={showNotification}
+              />
+            </TabPanel>
+            <TabPanel value={activeTab} index={2}>
+              <TaskManagementPanel
+                baseUrl={baseUrl}
+                token={token}
+                user={user}
+                onNotify={showNotification}
+              />
+            </TabPanel>
           </Stack>
-          <Tabs
-            value={activeTab}
-            onChange={(_event, value) => setActiveTab(value)}
-            aria-label="Application navigation"
-            variant="scrollable"
-            scrollButtons="auto"
-          >
-            <Tab label="Health" {...tabProps(0)} />
-            <Tab label="Run Tasks" disabled={!token} {...tabProps(1)} />
-            <Tab label="Results" disabled={!token} {...tabProps(2)} />
-          </Tabs>
-          <TabPanel value={activeTab} index={0}>
-            <Grid container spacing={3}>
-              <Grid item xs={12} md={6}>
-                <ApiConfigPanel
-                  baseUrl={baseUrl}
-                  onBaseUrlChange={setBaseUrl}
-                  onNotify={showNotification}
-                />
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <AuthPanel
-                  baseUrl={baseUrl}
-                  token={token}
-                  user={user}
-                  onLogin={handleLogin}
-                  onLogout={handleLogout}
-                  onNotify={showNotification}
-                />
-              </Grid>
-            </Grid>
-          </TabPanel>
-          <TabPanel value={activeTab} index={1}>
-            <RunTaskForm
-              baseUrl={baseUrl}
-              token={token}
-              onNotify={showNotification}
-            />
-          </TabPanel>
-          <TabPanel value={activeTab} index={2}>
-            <TaskManagementPanel
-              baseUrl={baseUrl}
-              token={token}
-              user={user}
-              onNotify={showNotification}
-            />
-          </TabPanel>
-        </Stack>
-      </Container>
+        </Container>
+      </Box>
       <Snackbar
         open={snackbarOpen}
         autoHideDuration={4000}

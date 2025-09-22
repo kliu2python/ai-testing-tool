@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Button,
@@ -27,6 +27,8 @@ interface AuthPanelProps {
   onLogin: (token: string, user: AuthenticatedUser) => void;
   onLogout: () => void;
   onNotify: (notification: NotificationState) => void;
+  activeMode?: "login" | "signup";
+  onModeChange?: (mode: "login" | "signup") => void;
 }
 
 export default function AuthPanel({
@@ -35,7 +37,9 @@ export default function AuthPanel({
   user,
   onLogin,
   onLogout,
-  onNotify
+  onNotify,
+  activeMode,
+  onModeChange
 }: AuthPanelProps) {
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
@@ -43,6 +47,12 @@ export default function AuthPanel({
   const [loading, setLoading] = useState(false);
 
   const isAuthenticated = Boolean(token && user);
+
+  useEffect(() => {
+    if (activeMode && activeMode !== mode) {
+      setMode(activeMode);
+    }
+  }, [activeMode, mode]);
 
   async function handleSubmit() {
     if (!email.trim() || !password.trim()) {
@@ -109,6 +119,7 @@ export default function AuthPanel({
             onChange={(_event, value) => {
               if (value) {
                 setMode(value);
+                onModeChange?.(value);
               }
             }}
             disabled={isAuthenticated}

@@ -5,9 +5,19 @@ import {
   Card,
   CardHeader,
   CardMedia,
+  Chip,
   Divider,
+  IconButton,
+  Paper,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   TextField,
+  Tooltip,
   Typography
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -15,7 +25,7 @@ import TaskIcon from "@mui/icons-material/Task";
 import InsightsIcon from "@mui/icons-material/Insights";
 import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
 
-import { apiRequest, formatPayload } from "../api";
+import { apiRequest } from "../api";
 import type {
   AuthenticatedUser,
   NotificationState,
@@ -43,15 +53,50 @@ export default function TaskManagementPanel({
   user,
   onNotify
 }: TaskManagementPanelProps) {
-  const [tasksContent, setTasksContent] = useState("");
+  const [tasks, setTasks] = useState<TaskCollectionResponse | null>(null);
   const [statusContent, setStatusContent] = useState("");
   const [resultContent, setResultContent] = useState("");
   const [taskId, setTaskId] = useState("");
   const [steps, setSteps] = useState<StepInfo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const assetBase = useMemo(() => baseUrl.replace(/\/$/, ""), [baseUrl]);
+
+  type TaskStatusKey = keyof TaskCollectionResponse;
+
+  const statusMeta: Record<
+    TaskStatusKey,
+    { label: string; color: "default" | "error" | "info" | "success" | "warning" }
+  > = useMemo(
+    () => ({
+      pending: { label: "Pending", color: "warning" },
+      running: { label: "Running", color: "info" },
+      completed: { label: "Completed", color: "success" },
+      error: { label: "Error", color: "error" }
+    }),
+    []
+  );
+
+  interface TaskRow {
+    id: string;
+    status: TaskStatusKey;
+  }
+
+  const taskRows = useMemo<TaskRow[]>(() => {
+    if (!tasks) {
+      return [];
+    }
+    const statuses: TaskStatusKey[] = [
+      "pending",
+      "running",
+      "completed",
+      "error"
+    ];
+    return statuses.flatMap((status) =>
+      tasks[status].map((id) => ({ id, status }))
+    );
+  }, [tasks]);
 
   function requireToken(): string | null {
     if (!token) {
@@ -77,11 +122,12 @@ export default function TaskManagementPanel({
     setLoading(false);
     if (result.ok) {
       onNotify({ message: "Fetched tasks", severity: "success" });
+      setTasks(result.data ?? null);
     } else {
       const message = result.error ?? `Request failed with ${result.status}`;
       onNotify({ message, severity: "error" });
+      setTasks(null);
     }
-    setTasksContent(formatPayload(result.data));
   }
 
   async function loadStatus() {
@@ -145,8 +191,8 @@ export default function TaskManagementPanel({
     setSteps(responseSteps);
   }
 
-  async function deleteTask() {
-    const trimmed = taskId.trim();
+  async function deleteTask(targetId?: string) {
+    const trimmed = (targetId ?? taskId).trim();
     if (!trimmed) {
       onNotify({ message: "Enter a task ID", severity: "warning" });
       return;
@@ -155,28 +201,34 @@ export default function TaskManagementPanel({
     if (!authToken) {
       return;
     }
-    setDeleting(true);
-    const result = await apiRequest(
-      baseUrl,
-      "delete",
-      `/tasks/${trimmed}`,
-      undefined,
-      authToken
-    );
-    setDeleting(false);
-    if (result.ok) {
-      onNotify({ message: "Task deleted", severity: "success" });
-      setStatusContent("");
-      setResultContent("");
-      setSteps([]);
-      await refreshTasks();
-    } else {
-      const message = result.error ?? `Request failed with ${result.status}`;
-      onNotify({ message, severity: "error" });
+    setDeletingId(trimmed);
+    try {
+      const result = await apiRequest(
+        baseUrl,
+        "delete",
+        `/tasks/${trimmed}`,
+        undefined,
+        authToken
+      );
+      if (result.ok) {
+        onNotify({ message: "Task deleted", severity: "success" });
+        setStatusContent("");
+        setResultContent("");
+        setSteps([]);
+        if (taskId.trim() === trimmed) {
+          setTaskId("");
+        }
+        await refreshTasks();
+      } else {
+        const message = result.error ?? `Request failed with ${result.status}`;
+        onNotify({ message, severity: "error" });
+      }
+    } finally {
+      setDeletingId(null);
     }
   }
 
-  const disableActions = loading || deleting;
+  const disableActions = loading || Boolean(deletingId);
 
   return (
     <Stack spacing={3}>
@@ -203,13 +255,87 @@ export default function TaskManagementPanel({
           startIcon={<DeleteForeverIcon />}
           color="error"
           variant="outlined"
-          onClick={deleteTask}
-          disabled={disableActions}
+          onClick={() => deleteTask()}
+          disabled={disableActions || !taskId.trim()}
         >
           Delete Task
         </Button>
       </Stack>
-      <JsonOutput title="Tasks" content={tasksContent} />
+      <Stack spacing={1.5}>
+        <Typography variant="h6">Queued Tasks</Typography>
+        <Typography variant="body2" color="text.secondary">
+          Click a row to populate the Task ID field for status lookups or to
+          delete the entry directly.
+        </Typography>
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small" aria-label="queued tasks">
+            <TableHead>
+              <TableRow>
+                <TableCell>Task ID</TableCell>
+                <TableCell>Status</TableCell>
+                <TableCell align="right">Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {taskRows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3}>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      align="center"
+                      sx={{ py: 2 }}
+                    >
+                      {tasks
+                        ? "No tasks available. Refresh again once new runs are queued."
+                        : "Refresh to load your recent automation tasks."}
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                taskRows.map((row) => (
+                  <TableRow
+                    key={`${row.status}-${row.id}`}
+                    hover
+                    onClick={() => setTaskId(row.id)}
+                    selected={taskId.trim() === row.id}
+                    sx={{ cursor: "pointer" }}
+                  >
+                    <TableCell>{row.id}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={statusMeta[row.status].label}
+                        color={statusMeta[row.status].color}
+                        size="small"
+                        variant={row.status === "pending" ? "outlined" : "filled"}
+                      />
+                    </TableCell>
+                    <TableCell align="right">
+                      <Tooltip title="Delete task">
+                        <span>
+                          <IconButton
+                            aria-label={`delete-${row.id}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              deleteTask(row.id);
+                            }}
+                            disabled={
+                              disableActions || deletingId === row.id
+                            }
+                            size="small"
+                          >
+                            <DeleteForeverIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </Stack>
       <TextField
         label="Task ID"
         value={taskId}

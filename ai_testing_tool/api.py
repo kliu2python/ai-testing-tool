@@ -404,7 +404,7 @@ app.add_middleware(
 
 app.mount(
     "/reports",
-    StaticFiles(directory="./reports", html=False, check_dir=False),
+    StaticFiles(directory=str(_REPORTS_ROOT), html=False, check_dir=False),
     name="reports",
 )
 
@@ -622,7 +622,7 @@ def _step_candidates(directory: Path) -> Iterable[Path]:
     """Yield potential screenshot files from ``directory``."""
 
     for extension in ("png", "jpg", "jpeg"):
-        yield from directory.glob(f"step_*.{extension}")
+        yield from directory.rglob(f"step_*.{extension}")
 
 
 def _build_step_images(summary_path: Optional[str]) -> List[StepInfo]:
@@ -642,6 +642,8 @@ def _build_step_images(summary_path: Optional[str]) -> List[StepInfo]:
 
     chosen: Dict[int, Path] = {}
     for candidate in _step_candidates(directory):
+        if not candidate.is_file():
+            continue
         match = re.search(r"step_(\d+)", candidate.name)
         if not match:
             continue
