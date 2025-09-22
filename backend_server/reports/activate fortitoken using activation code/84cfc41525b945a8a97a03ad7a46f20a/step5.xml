@@ -1,4 +1,0 @@
-<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
-<hierarchy index="0" class="hierarchy" rotation="0" width="320" height="640">
-  <android.widget.FrameLayout index="0" package="com.fortinet.android.ftm" class="android.widget.FrameLayout" text="" checkable="false" checked="false" clickable="false" enabled="true" focusable="false" focused="false" long-clickable="false" password="false" scrollable="false" selected="false" bounds="[0,0][320,640]" displayed="true" />
-</hierarchy>

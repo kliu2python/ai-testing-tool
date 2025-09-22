@@ -11,4 +11,5 @@ build
 *.idea
 .idea
 frontend_server/node_modules
-backend_server/reports
+/backend_server/reports/
+/backend_server/*.db

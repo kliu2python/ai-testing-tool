@@ -1,1 +1,0 @@
-{"action": "input", "xpath": "//*[@text='Key']", "value": "GEAD2IZEHWDN2SLTTWIMMFX4FDUFZUSRKGBSL6NUEHTA3IRB6DAG77HOFUCCSFW4", "explanation": "I need to input the activate code to activate the token. I can see the text of the input box is 'Key', So I will use it to find the input box and input the activate code.", "result": "success"}

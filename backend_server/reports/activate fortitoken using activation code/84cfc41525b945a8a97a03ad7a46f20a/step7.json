@@ -1,1 +1,0 @@
-{"action": "error", "message": "The token has expired and requires a new one from the administrator.", "explanation": "The activation process has failed due to an expired token. The error message indicates that a new token must be obtained from the administrator before retrying the activation process.", "result": "success"}
