@@ -16,9 +16,9 @@ RUN apt-get update \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ai_testing_tool ./ai_testing_tool
-COPY ai-testing-tool.py ./
+COPY backend_server ./backend_server
+COPY backend_server.py ./
 
 ENV PYTHONPATH=/app
 
-CMD ["python", "ai_testing_tool/queue_runner.py"]
+CMD ["python", "backend_server/queue_runner.py"]

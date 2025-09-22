@@ -16,11 +16,11 @@ RUN apt-get update \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ai_testing_tool ./ai_testing_tool
-COPY ai-testing-tool.py ./
+COPY backend_server ./backend_server
+COPY backend_server.py ./
 
 ENV PYTHONPATH=/app
 
 EXPOSE 8000
 
-CMD ["uvicorn", "ai_testing_tool.api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "backend_server.api:app", "--host", "0.0.0.0", "--port", "8000"]

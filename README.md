@@ -8,7 +8,6 @@ The test case is
 When you add a google account in Passwords & accounts, username is abc@gmail.com, password is 123456. Then you should see an error "Couldn't find your Google Account".
 ```
 
-![](./ai-testing-tool-5x-demo.gif)
 
 ## Architecture
 
@@ -20,14 +19,14 @@ When you add a google account in Passwords & accounts, username is abc@gmail.com
 Run the following command to run the tool
 
 ```sh
-OPENAI_API_KEY=<openai api key> python ai-testing-tool.py <system prompt file> <task file> \
+OPENAI_API_KEY=<openai api key> python backend_server.py <system prompt file> <task file> \
   --server=<automation server address> --platform=<android|ios|web>
 ```
 
 Run the following command to run the tool in debug mode
 
 ```sh
-python ai-testing-tool.py <system prompt file> <task file> --debug \
+python backend_server.py <system prompt file> <task file> --debug \
   --server=<automation server address> --platform=<android|ios|web>
 ```
 
@@ -38,7 +37,7 @@ requirements and launch the API with Uvicorn:
 
 ```sh
 pip install -r requirements.txt
-uvicorn ai_testing_tool.api:app --host 0.0.0.0 --port 8090
+uvicorn backend_server.api:app --host 0.0.0.0 --port 8090
 ```
 
 The server listens on all interfaces so that it can be reached from remote
@@ -62,14 +61,14 @@ The response returns the aggregated summary along with the path to the generated
 
 ## Web Frontend
 
-A modern React and TypeScript frontend is available in the `frontend/` directory.
+A modern React and TypeScript frontend is available in the `frontend_server/` directory.
 It uses [Vite](https://vitejs.dev/) and Material UI components to interact with the
 FastAPI service.
 
 ### Running the frontend
 
 ```sh
-cd frontend
+cd frontend_server
 npm install
 npm run dev -- --host 0.0.0.0 --port 5173
 ```
@@ -84,7 +83,7 @@ For production builds you can run:
 npm run build
 ```
 
-which outputs static assets in `frontend/dist/`. Use `npm run preview` to test the
+which outputs static assets in `frontend_server/dist/`. Use `npm run preview` to test the
 production build locally.
 
 

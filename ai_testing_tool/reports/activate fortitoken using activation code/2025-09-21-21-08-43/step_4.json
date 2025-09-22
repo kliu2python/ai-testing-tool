@@ -1,1 +1,0 @@
-{"action": "wait", "timeout": 5000, "explanation": "I need to wait for the page to load or change after entering the activation code and name. The page might be processing the input, so waiting is necessary.", "result": "success"}
