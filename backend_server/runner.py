@@ -116,10 +116,10 @@ def generate_next_action(
     )
 
     openAI = OpenAI(
-        api_key="sk-nNExWdZTkr345v7Ht5xzOQ", base_url="http://10.160.29.219:4000/v1"
+        api_key="sk-a122sVi4BhKo8XhtRx3Epg", base_url="https://litellm.ai-server.fortiappsec.com/v1/"
     )
     chat_response = openAI.chat.completions.create(
-        model="ollama/qwen2.5vl:32b", messages=messages
+        model="qwen3-235b-a22b", messages=messages
     )
 
     # openAI = OpenAI(api_key="sk-RKRlOBmzoU98cdadrz3KUw", base_url="http://10.160.18.17:4000/v1")
