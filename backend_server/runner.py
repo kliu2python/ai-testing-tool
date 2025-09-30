@@ -177,6 +177,35 @@ def _appium_client_config(server: str) -> Optional[AppiumClientConfig]:
     )
 
 
+def _needs_wd_hub_retry(error: Exception) -> bool:
+    """Return ``True`` when ``error`` indicates an Appium base-path issue."""
+
+    message = getattr(error, "msg", None) or str(error)
+    if not message:
+        return False
+    lowered = message.lower()
+    if "requested resource could not be found" in lowered:
+        return True
+    if "404" in lowered and "wd/hub" in lowered:
+        return True
+    return False
+
+
+def _append_wd_hub(server: str) -> str:
+    """Append ``/wd/hub`` to ``server`` when it is missing."""
+
+    parsed = urlparse(server)
+    path = parsed.path or ""
+    trimmed = path.rstrip("/")
+    if trimmed.endswith("wd/hub"):
+        return server
+    if trimmed:
+        new_path = f"{trimmed}/wd/hub"
+    else:
+        new_path = "/wd/hub"
+    return urlunparse(parsed._replace(path=new_path))
+
+
 def create_driver(_server, _platform="android",
                   extra_caps: Optional[Dict[str, Any]] = None):
     extra_caps = extra_caps or {}
@@ -204,11 +233,26 @@ def create_driver(_server, _platform="android",
             }
         capabilities.update(extra_caps)
         assert server is not None
-        return webdriver.Remote(
-            server,
-            options=UiAutomator2Options().load_capabilities(capabilities),
-            client_config=client_config,
+        options = UiAutomator2Options().load_capabilities(capabilities)
+
+        def _connect(target: str):
+            return webdriver.Remote(
+                target,
+                options=options,
+                client_config=client_config,
             )
+
+        try:
+            return _connect(server)
+        except WebDriverException as exc:
+            if _needs_wd_hub_retry(exc):
+                fallback = _append_wd_hub(server)
+                if fallback != server:
+                    print(
+                        "[INFO] Retrying Appium connection with '/wd/hub' base path",
+                    )
+                    return _connect(fallback)
+            raise
 
     if platform == "ios":
         capabilities = {
@@ -223,11 +267,26 @@ def create_driver(_server, _platform="android",
             }
         capabilities.update(extra_caps)
         assert server is not None
-        return webdriver.Remote(
-            server,
-            options=XCUITestOptions().load_capabilities(capabilities),
-            client_config=client_config,
+        options = XCUITestOptions().load_capabilities(capabilities)
+
+        def _connect(target: str):
+            return webdriver.Remote(
+                target,
+                options=options,
+                client_config=client_config,
             )
+
+        try:
+            return _connect(server)
+        except WebDriverException as exc:
+            if _needs_wd_hub_retry(exc):
+                fallback = _append_wd_hub(server)
+                if fallback != server:
+                    print(
+                        "[INFO] Retrying Appium connection with '/wd/hub' base path",
+                    )
+                    return _connect(fallback)
+            raise
 
     if platform == "web":
         dhub_obj = Dhub(
