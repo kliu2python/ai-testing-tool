@@ -36,4 +36,4 @@ WORKDIR /app
 EXPOSE 8090
 
 # WORKDIR already puts us in /app; api.py is under backend_server/api.py
-CMD ["uvicorn","backend_server.api:app","--host","0.0.0.0","--port","8090", "--ssl-certfile","./backend_server/tls.crt","--ssl-keyfile","./backend_server/tls.key"]
+CMD ["uvicorn", "backend_server.api:app", "--host", "0.0.0.0", "--port", "8090"]
