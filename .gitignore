@@ -14,5 +14,7 @@ backend_server/*.db
 
 tls.crt
 tls.key
+ca-chain.cert.pem
 **/tls.crt
 **/tls.key
+**/ca-chain.cert.pem
