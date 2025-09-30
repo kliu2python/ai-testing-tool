@@ -8,14 +8,14 @@ from typing import Any, Dict, Optional
 
 from redis import RedisError
 
-from runner import _run_tasks
-from task_queue import (
+from backend_server.runner import _run_tasks
+from backend_server.task_queue import (
     create_redis_client,
     dump_status,
     queue_key,
     status_key,
 )
-from task_store import set_task_status
+from backend_server.task_store import set_task_status
 
 
 def _update_status(
