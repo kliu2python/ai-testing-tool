@@ -13,10 +13,12 @@ from dataclasses import dataclass
 from functools import partial
 from time import sleep
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse, urlunparse
 
 from appium import webdriver
 from appium.options.android import UiAutomator2Options
 from appium.options.ios import XCUITestOptions
+from appium.webdriver.client_config import AppiumClientConfig
 from appium.webdriver.common.appiumby import AppiumBy
 from html.parser import HTMLParser
 from openai import OpenAI
@@ -117,11 +119,76 @@ def generate_next_action(_prompt, _task, _history_actions, page_source_file):
 # -------------------------------------------------------
 # Drivers (multi-app friendly)
 # -------------------------------------------------------
+def _truthy(value: Optional[str]) -> bool:
+    """Return ``True`` when ``value`` represents a truthy string."""
+
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalise_appium_server(server: str) -> str:
+    """Normalise the supplied Appium server URL.
+
+    * Adds a default scheme (``APPIUM_DEFAULT_SCHEME`` or ``http``) when one is
+      omitted.
+    * Upgrades ``http`` URLs to ``https`` when ``APPIUM_FORCE_TLS`` is truthy.
+    """
+
+    server = server.strip()
+    if not server:
+        raise ValueError("Appium server URL must not be empty")
+
+    default_scheme = os.getenv("APPIUM_DEFAULT_SCHEME", "http")
+    force_tls = _truthy(os.getenv("APPIUM_FORCE_TLS"))
+
+    if "://" not in server:
+        server = f"{default_scheme}://{server}"
+
+    parsed = urlparse(server)
+    if force_tls and parsed.scheme.lower() == "http":
+        parsed = parsed._replace(scheme="https")
+        server = urlunparse(parsed)
+
+    return server
+
+
+def _appium_client_config(server: str) -> Optional[AppiumClientConfig]:
+    """Build a TLS aware ``AppiumClientConfig`` when needed."""
+
+    ignore_certs = _truthy(os.getenv("APPIUM_IGNORE_CERTIFICATES"))
+    ca_certs = os.getenv("APPIUM_CA_CERTS") or None
+    timeout_env = os.getenv("APPIUM_CLIENT_TIMEOUT")
+    timeout = None
+    if timeout_env:
+        try:
+            timeout = int(timeout_env)
+        except ValueError as exc:
+            raise ValueError("APPIUM_CLIENT_TIMEOUT must be an integer") from exc
+
+    if not any([ignore_certs, ca_certs, timeout]) and not server.lower().startswith("https://"):
+        return None
+
+    return AppiumClientConfig(
+        server,
+        ignore_certificates=ignore_certs,
+        ca_certs=ca_certs,
+        timeout=timeout,
+    )
+
+
 def create_driver(_server, _platform="android",
                   extra_caps: Optional[Dict[str, Any]] = None):
     extra_caps = extra_caps or {}
+    platform = _platform.lower()
 
-    if _platform.lower() == "android":
+    server: Optional[str] = None
+    client_config: Optional[AppiumClientConfig] = None
+    if platform in {"android", "ios"}:
+        server = _normalise_appium_server(_server)
+        client_config = _appium_client_config(server)
+
+    if platform == "android":
         capabilities = {
             "platformName": "Android",
             "automationName": "uiautomator2",
@@ -136,12 +203,14 @@ def create_driver(_server, _platform="android",
             "appium:noReset": True,
             }
         capabilities.update(extra_caps)
+        assert server is not None
         return webdriver.Remote(
-            _server,
+            server,
             options=UiAutomator2Options().load_capabilities(capabilities),
+            client_config=client_config,
             )
 
-    if _platform.lower() == "ios":
+    if platform == "ios":
         capabilities = {
             "appium:xcodeSigningId": "App Development",
             "appium:automationName": "XCUITest",
@@ -153,12 +222,14 @@ def create_driver(_server, _platform="android",
             "appium:wdaLocalPort": "8101",
             }
         capabilities.update(extra_caps)
+        assert server is not None
         return webdriver.Remote(
-            _server,
-            options=XCUITestOptions().load_capabilities(capabilities)
+            server,
+            options=XCUITestOptions().load_capabilities(capabilities),
+            client_config=client_config,
             )
 
-    if _platform.lower() == "web":
+    if platform == "web":
         dhub_obj = Dhub(
             browser="chrome",
             version="125.0",
