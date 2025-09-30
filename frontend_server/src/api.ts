@@ -1,22 +1,9 @@
 import axios, { AxiosError } from "axios";
 import type { ApiResult } from "./types";
 
-export const API_BASE_DEFAULT = "http://ai-ui-test.qa.fortinet-us.com:8090";
+export const API_BASE_DEFAULT = "https://ai-ui-test.qa.fortinet-us.com:8090";
 
 type HttpMethod = "get" | "post" | "delete" | "patch";
-
-function normaliseBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  const hasScheme = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(trimmed);
-  if (hasScheme) {
-    return trimmed;
-  }
-  return `http://${trimmed}`;
-}
 
 export async function apiRequest<T = unknown>(
   baseUrl: string,
@@ -25,9 +12,8 @@ export async function apiRequest<T = unknown>(
   payload?: unknown,
   token?: string | null
 ): Promise<ApiResult<T>> {
-  const baseURL = normaliseBaseUrl(baseUrl).replace(/\/$/, "");
   const client = axios.create({
-    baseURL,
+    baseURL: baseUrl.replace(/\/$/, ""),
     headers: { "Content-Type": "application/json" }
   });
 

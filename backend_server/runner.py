@@ -1026,16 +1026,14 @@ async def run_tasks_async(
     return await loop.run_in_executor(executor, func)
 
 
-def main() -> None:
-    """Command line entry point for the backend server."""
-
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI Testing Tool")
     parser.add_argument("prompt", help="Prompt file")
     parser.add_argument("task", help="Task file")
     parser.add_argument(
-        "--server",
+        "--appium",
         default="http://localhost:4723",
-        help="Automation server address, default is http://localhost:4723",
+        help="Appium server, default is localhost:4723",
     )
     parser.add_argument(
         "--platform",
@@ -1043,15 +1041,9 @@ def main() -> None:
         default="android",
         help="Target platform for testing",
     )
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode, default is false")
     parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug mode, default is false",
-    )
-    parser.add_argument(
-        "--reports",
-        default="./reports",
-        help="Folder to store the reports, default is ./reports",
+        "--reports", default="./reports", help="Folder to store the reports, default is ./reports"
     )
 
     args = parser.parse_args()
@@ -1059,15 +1051,72 @@ def main() -> None:
     prompt_file = args.prompt
     task_file = args.task
     debug = args.debug
-    reports_folder = args.reports
-    server = args.server
     platform = args.platform
+    reports_folder = args.reports
+    appium_server = args.appium
 
-    prompt = read_file_content(prompt_file) or ""
-    tasks = json.loads(read_file_content(task_file) or "[]")
+    prompt = read_file_content(prompt_file)
+    tasks = json.loads(read_file_content(task_file))
 
-    run_tasks(prompt, tasks, server, platform, reports_folder, debug)
+    driver = create_driver(appium_server, platform)
+    driver.implicitly_wait(0.2)
+    thread = threading.Thread(target=lambda: keep_driver_live(driver), daemon=True)
+    thread.start()
 
+    for i, task in enumerate(tasks):
+        print(task)
+        name = task.get("name", f"task_{i+1}")
+        details = task.get("details", "")
+        skip = task.get("skip", False)
+        apps = task.get("apps") or []  # <---- per-task app activation order
+        if skip:
+            print(f"skip {name}")
+            continue
 
-if __name__ == "__main__":
-    main()
+        task_folder = create_folder(f"{reports_folder}/{name}/{get_current_timestamp()}")
+        write_to_file(f"{task_folder}/task.json", json.dumps(task, ensure_ascii=False, indent=2))
+        sleep(0.5)
+
+        # Activate any declared apps for this task, in order
+        activate_sequence_for_task(driver, platform, apps)
+
+        page_source_for_next_step = take_page_source(driver, task_folder, "step_0")
+        history_actions: List[str] = []
+        step = 0
+
+        while page_source_for_next_step is not None:
+            step += 1
+            page_source = read_file_content(page_source_for_next_step)
+            history_actions_str = "\\n".join(history_actions)
+            prompts = [
+                f"# Task \\n {details}",
+                f"# History of Actions \\n {history_actions_str}",
+                f"# Source of Page \\n ```yaml\\n {page_source} \\n```",
+            ]
+            write_to_file(f"{task_folder}/step_{step}_prompt.md", "\\n".join(prompts))
+
+            if debug:
+                next_action = input("next action:")
+            else:
+                next_action = generate_next_action(
+                    prompt,
+                    details,
+                    history_actions,
+                    page_source_for_next_step
+                )
+
+            print(f"{step}: {next_action}")
+
+            (page_source_for_next_step,
+                _page_screenshot_for_next_step,
+                next_action_with_result) = process_next_action(next_action, driver, task_folder, f"step_{step}")
+
+            write_to_file(f"{task_folder}/step_{step}.json", next_action_with_result)
+            history_actions.append(next_action_with_result)
+
+        # Quit driver after last task
+        if i == len(tasks) - 1:
+            try:
+                driver.quit()
+            finally:
+                driver = None
