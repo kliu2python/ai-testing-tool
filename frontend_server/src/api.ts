@@ -1,7 +1,7 @@
 import axios, { AxiosError } from "axios";
 import type { ApiResult } from "./types";
 
-export const API_BASE_DEFAULT = "http://10.160.13.110:8090";
+export const API_BASE_DEFAULT = "https://ai-ui-test.qa.fortinet-us.com:8090";
 
 type HttpMethod = "get" | "post" | "delete" | "patch";
 

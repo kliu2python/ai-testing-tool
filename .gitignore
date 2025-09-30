@@ -11,3 +11,8 @@ frontend/dist/
 frontend/package-lock.json
 backend_server/reports/
 backend_server/*.db
+
+tls.crt
+tls.key
+**/tls.crt
+**/tls.key

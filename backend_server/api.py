@@ -872,10 +872,10 @@ if __name__ == "__main__":
             )
         return str(candidate)
 
-    ssl_certfile = _resolve_ssl_path(os.getenv("APP_SSL_CERTFILE"), "APP_SSL_CERTFILE")
-    ssl_keyfile = _resolve_ssl_path(os.getenv("APP_SSL_KEYFILE"), "APP_SSL_KEYFILE")
-    ssl_ca_certs = _resolve_ssl_path(os.getenv("APP_SSL_CA_CERTS"), "APP_SSL_CA_CERTS")
-    ssl_keyfile_password = os.getenv("APP_SSL_KEYFILE_PASSWORD")
+    ssl_certfile = _resolve_ssl_path("./tls.crt", "tls.crt")
+    ssl_keyfile = _resolve_ssl_path("./tls.key", "tls.key")
+    ssl_ca_certs = _resolve_ssl_path("./ca-chain.cert.pem", "ca-chain.cert.pem")
+    ssl_keyfile_password = "Fortinet123#"
 
     ssl_options: Dict[str, Any] = {}
     if ssl_certfile and ssl_keyfile:
