@@ -1,19 +1,25 @@
+from __future__ import annotations
+
 import argparse
+import asyncio
+import base64
 import datetime
 import json
 import os
+import re
 import threading
-from typing import Optional, Dict, Any, List
-
-from openai import OpenAI
-
-import base64
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from functools import partial
 from time import sleep
+from typing import Any, Dict, List, Optional, Tuple
+
 from appium import webdriver
 from appium.options.android import UiAutomator2Options
 from appium.options.ios import XCUITestOptions
 from appium.webdriver.common.appiumby import AppiumBy
 from html.parser import HTMLParser
+from openai import OpenAI
 from selenium import webdriver as selenium_webdriver
 from selenium.common.exceptions import (
     NoSuchElementException,
@@ -30,6 +36,29 @@ from dotenv import load_dotenv
 from libraries.taas.dhub import Dhub
 
 load_dotenv()
+
+
+@dataclass
+class RunResult:
+    """Container for aggregated run results."""
+
+    summary: List[Dict[str, Any]]
+    summary_path: str
+
+
+_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_EXECUTOR_LOCK = threading.Lock()
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    """Return a lazily initialised thread pool for background runs."""
+
+    global _EXECUTOR
+    with _EXECUTOR_LOCK:
+        if _EXECUTOR is None:
+            max_workers = int(os.getenv("RUNNER_MAX_WORKERS", "4"))
+            _EXECUTOR = ThreadPoolExecutor(max_workers=max_workers)
+    return _EXECUTOR
 
 
 # -----------------------------
@@ -820,17 +849,193 @@ def keep_driver_live(driver: webdriver.Remote):
         print("closing thread.")
 
 
-# -----------------------------
-# Main
-# -----------------------------
-if __name__ == "__main__":
+def generate_summary_report(reports_folder: str, summary: List[dict]) -> str:
+    """Save aggregated task results to ``summary.json``."""
+
+    report_path = f"{reports_folder}/summary.json"
+    return write_to_file(report_path, json.dumps(summary, indent=2))
+
+
+def _run_tasks(
+    prompt: str,
+    tasks: List[Dict[str, Any]],
+    server: str,
+    platform: str,
+    reports_folder: str,
+    debug: bool = False,
+    task_id: Optional[str] = None,
+) -> RunResult:
+    """Execute tasks using the configured automation server."""
+
+    create_folder(reports_folder)
+    run_identifier = task_id or get_current_timestamp()
+    driver = create_driver(server, platform)
+    driver.implicitly_wait(0.2)
+    thread = threading.Thread(target=lambda: keep_driver_live(driver), daemon=True)
+    thread.start()
+
+    summary: List[dict] = []
+    summary_path = ""
+
+    try:
+        for task in tasks:
+            print(task)
+            name = task["name"]
+            details = task["details"]
+            skip = task.get("skip", False)
+            scope = task.get("scope", "functional")
+            steps = task.get("steps")
+            if skip:
+                print(f"skip {name}")
+                continue
+
+            reports_path = os.path.join(reports_folder, name, run_identifier)
+            task_folder = create_folder(reports_path)
+            write_to_file(f"{task_folder}/task.json", json.dumps(task))
+            sleep(1)
+            page_source_for_next_step = take_page_source(driver, task_folder, "step0")
+            page_screenshot_for_next_step = take_screenshot(
+                driver, task_folder, "step0"
+            )
+            history_actions: List[str] = []
+            step = 0
+            task_result = {
+                "name": name,
+                "scope": scope,
+                "steps": [],
+                "reports_path": os.path.normpath(reports_path).replace("\\", "/"),
+                "task_id": run_identifier,
+            }
+
+            if steps:
+                for step_action in steps:
+                    step += 1
+                    next_action = json.dumps(step_action)
+                    (
+                        page_source_for_next_step,
+                        page_screenshot_for_next_step,
+                        next_action_with_result,
+                    ) = process_next_action(
+                        next_action, driver, task_folder, f"step{step}"
+                    )
+                    write_to_file(
+                        f"{task_folder}/step{step}.json",
+                        next_action_with_result,
+                    )
+                    task_result["steps"].append(json.loads(next_action_with_result))
+            else:
+                while page_source_for_next_step is not None:
+                    step += 1
+                    page_source = read_file_content(page_source_for_next_step) or ""
+                    history_actions_str = "\n".join(history_actions)
+                    prompts = [
+                        f"# Task \n {details}",
+                        f"# History of Actions \n {history_actions_str}",
+                        f"# Source of Page \n ```yaml\n {page_source} \n```",
+                    ]
+                    write_to_file(
+                        f"{task_folder}/step{step}_prompt.md",
+                        "\n".join(prompts),
+                    )
+
+                    if debug:
+                        next_action = input("next action:")
+                    else:
+                        next_action = generate_next_action(
+                            prompt,
+                            details,
+                            history_actions,
+                            page_source_for_next_step,
+                            page_screenshot_for_next_step,
+                        )
+
+                    print(f"{step}: {next_action}")
+
+                    (
+                        page_source_for_next_step,
+                        page_screenshot_for_next_step,
+                        next_action_with_result,
+                    ) = process_next_action(
+                        next_action, driver, task_folder, f"step{step}"
+                    )
+                    write_to_file(
+                        f"{task_folder}/step{step}.json",
+                        next_action_with_result,
+                    )
+                    history_actions.append(next_action_with_result)
+                    task_result["steps"].append(json.loads(next_action_with_result))
+
+            summary.append(task_result)
+
+        if summary:
+            summary_folder = os.path.join(
+                reports_folder, summary[0]["name"], run_identifier
+            )
+            summary_path = generate_summary_report(summary_folder, summary)
+    finally:
+        driver.quit()
+
+    return RunResult(summary=summary, summary_path=summary_path)
+
+
+def run_tasks(
+    prompt: str,
+    tasks: List[Dict[str, Any]],
+    server: str,
+    platform: str,
+    reports_folder: str,
+    debug: bool = False,
+    task_id: Optional[str] = None,
+) -> RunResult:
+    """Run tasks synchronously (backwards compatible helper)."""
+
+    return _run_tasks(
+        prompt,
+        tasks,
+        server,
+        platform,
+        reports_folder,
+        debug,
+        task_id=task_id,
+    )
+
+
+async def run_tasks_async(
+    prompt: str,
+    tasks: List[Dict[str, Any]],
+    server: str,
+    platform: str,
+    reports_folder: str,
+    debug: bool = False,
+    task_id: Optional[str] = None,
+) -> RunResult:
+    """Run tasks in a shared background executor for concurrency."""
+
+    loop = asyncio.get_running_loop()
+    executor = _get_executor()
+    func = partial(
+        _run_tasks,
+        prompt,
+        tasks,
+        server,
+        platform,
+        reports_folder,
+        debug,
+        task_id,
+    )
+    return await loop.run_in_executor(executor, func)
+
+
+def main() -> None:
+    """Command line entry point for the backend server."""
+
     parser = argparse.ArgumentParser(description="AI Testing Tool")
     parser.add_argument("prompt", help="Prompt file")
     parser.add_argument("task", help="Task file")
     parser.add_argument(
-        "--appium",
+        "--server",
         default="http://localhost:4723",
-        help="Appium server, default is localhost:4723",
+        help="Automation server address, default is http://localhost:4723",
     )
     parser.add_argument(
         "--platform",
@@ -838,9 +1043,15 @@ if __name__ == "__main__":
         default="android",
         help="Target platform for testing",
     )
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode, default is false")
     parser.add_argument(
-        "--reports", default="./reports", help="Folder to store the reports, default is ./reports"
+        "--debug",
+        action="store_true",
+        help="Enable debug mode, default is false",
+    )
+    parser.add_argument(
+        "--reports",
+        default="./reports",
+        help="Folder to store the reports, default is ./reports",
     )
 
     args = parser.parse_args()
@@ -848,72 +1059,15 @@ if __name__ == "__main__":
     prompt_file = args.prompt
     task_file = args.task
     debug = args.debug
-    platform = args.platform
     reports_folder = args.reports
-    appium_server = args.appium
+    server = args.server
+    platform = args.platform
 
-    prompt = read_file_content(prompt_file)
-    tasks = json.loads(read_file_content(task_file))
+    prompt = read_file_content(prompt_file) or ""
+    tasks = json.loads(read_file_content(task_file) or "[]")
 
-    driver = create_driver(appium_server, platform)
-    driver.implicitly_wait(0.2)
-    thread = threading.Thread(target=lambda: keep_driver_live(driver), daemon=True)
-    thread.start()
+    run_tasks(prompt, tasks, server, platform, reports_folder, debug)
 
-    for i, task in enumerate(tasks):
-        print(task)
-        name = task.get("name", f"task_{i+1}")
-        details = task.get("details", "")
-        skip = task.get("skip", False)
-        apps = task.get("apps") or []  # <---- per-task app activation order
-        if skip:
-            print(f"skip {name}")
-            continue
 
-        task_folder = create_folder(f"{reports_folder}/{name}/{get_current_timestamp()}")
-        write_to_file(f"{task_folder}/task.json", json.dumps(task, ensure_ascii=False, indent=2))
-        sleep(0.5)
-
-        # Activate any declared apps for this task, in order
-        activate_sequence_for_task(driver, platform, apps)
-
-        page_source_for_next_step = take_page_source(driver, task_folder, "step_0")
-        history_actions: List[str] = []
-        step = 0
-
-        while page_source_for_next_step is not None:
-            step += 1
-            page_source = read_file_content(page_source_for_next_step)
-            history_actions_str = "\\n".join(history_actions)
-            prompts = [
-                f"# Task \\n {details}",
-                f"# History of Actions \\n {history_actions_str}",
-                f"# Source of Page \\n ```yaml\\n {page_source} \\n```",
-            ]
-            write_to_file(f"{task_folder}/step_{step}_prompt.md", "\\n".join(prompts))
-
-            if debug:
-                next_action = input("next action:")
-            else:
-                next_action = generate_next_action(
-                    prompt,
-                    details,
-                    history_actions,
-                    page_source_for_next_step
-                )
-
-            print(f"{step}: {next_action}")
-
-            (page_source_for_next_step,
-                _page_screenshot_for_next_step,
-                next_action_with_result) = process_next_action(next_action, driver, task_folder, f"step_{step}")
-
-            write_to_file(f"{task_folder}/step_{step}.json", next_action_with_result)
-            history_actions.append(next_action_with_result)
-
-        # Quit driver after last task
-        if i == len(tasks) - 1:
-            try:
-                driver.quit()
-            finally:
-                driver = None
+if __name__ == "__main__":
+    main()

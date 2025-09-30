@@ -8,3 +8,5 @@ uvicorn
 redis
 httpx
 pydantic[email]
+dotenv
+requests
