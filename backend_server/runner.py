@@ -13,6 +13,8 @@ from appium import webdriver
 from appium.options.android import UiAutomator2Options
 from appium.options.ios import XCUITestOptions
 from appium.webdriver.common.appiumby import AppiumBy
+from openai import OpenAI
+from PIL import Image, ImageDraw, ImageFont
 from html.parser import HTMLParser
 from selenium import webdriver as selenium_webdriver
 from selenium.common.exceptions import (
@@ -25,12 +27,26 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from PIL import Image, ImageDraw, ImageFont
 import xml.etree.ElementTree as ET
 import yaml
-from dotenv import load_dotenv
+from dotenv import load_doten
 
 from libraries.taas.dhub import Dhub
 
 load_dotenv()
 
+
+_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_EXECUTOR_LOCK = threading.Lock()
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    """Return a lazily initialised thread pool for background runs."""
+
+    global _EXECUTOR
+    with _EXECUTOR_LOCK:
+        if _EXECUTOR is None:
+            max_workers = int(os.getenv("RUNNER_MAX_WORKERS", "4"))
+            _EXECUTOR = ThreadPoolExecutor(max_workers=max_workers)
+    return _EXECUTOR
 
 # -----------------------------
 # File & image helpers
@@ -44,7 +60,6 @@ def read_file_content(file_path):
         print(f"Error: The file '{file_path}' does not exist.")
     except IOError:
         print(f"Error: Unable to read the file '{file_path}'.")
-
 
 def create_folder(folder_path):
     if not os.path.exists(folder_path):
@@ -353,7 +368,6 @@ def _coerce_scalar(s: str) -> Any:
     except ValueError:
         return s
 
-
 def _attrs_whitelist(platform: str) -> set:
     p = (platform or "").lower()
     if p == "android":
@@ -369,7 +383,6 @@ def _detect_platform_from_xml(xml_str: str) -> str:
     if "resource-id=" in xml_str or "content-desc=" in xml_str:
         return "android"
     return "unknown"
-
 
 def _detect_platform_from_driver(driver) -> Optional[str]:
     try:
@@ -541,6 +554,22 @@ def parse_bounds(bounds):
     right, bottom = map(int, right_bottom[:-1].split(","))
     return (left, top, right, bottom)
 
+def _safe_page_source(driver, retries=3):
+    for _ in range(retries):
+        try:
+            return driver.page_source
+        except NoSuchWindowException:
+            try:
+                handles = driver.window_handles
+                if handles:
+                    driver.switch_to.window(handles[-1])
+                    continue
+            except Exception:
+                pass
+        except WebDriverException:
+            sleep(0.3)  # page likely mid-navigation
+    return ""  # last resort, don’t kill the loop
+
 
 def _get_platform(_driver) -> str:
     try:
@@ -551,6 +580,271 @@ def _get_platform(_driver) -> str:
         p = (caps.get("platformName") or caps.get("platform") or "").lower()
         if p in ("android", "ios"):
             return p
+    except Exception:
+        pass
+    try:
+        if "XCUIElementType" in _driver.page_source:
+            return "ios"
+    except Exception:
+        pass
+    return "android"
+
+
+def _find_focused_element(driver, platform: str):
+    try:
+        if platform == "android":
+            return driver.find_element(AppiumBy.XPATH, "//*[@focused='true']")
+        else:
+            try:
+                return driver.find_element(AppiumBy.IOS_PREDICATE, "hasKeyboardFocus == 1")
+            except NoSuchElementException:
+                try:
+                    return driver.switch_to.active_element
+                except Exception:
+                    return None
+    except NoSuchElementException:
+        return None
+
+
+def _send_keys_safely(el, value: str, platform: str):
+    try:
+        el.send_keys(value)
+        return True
+    except WebDriverException:
+        pass
+    if platform == "ios":
+        try:
+            el.set_value(value)
+            return True
+        except WebDriverException:
+            pass
+    return False
+
+
+def _hide_keyboard_safely(driver, platform: str):
+    try:
+        driver.hide_keyboard()
+    except Exception:
+        pass
+
+
+# ---- App aliasing & per-task activation ----
+APP_ALIASES_IOS: Dict[str, str] = {
+    "settings": "com.apple.Preferences",
+    "preferences": "com.apple.Preferences",
+    "testflight": "com.apple.TestFlight",
+    "fortitoken": "FortiToken-Mobile",
+    "fortitoken-mobile": "FortiToken-Mobile",
+}
+APP_ALIASES_ANDROID: Dict[str, str] = {
+    "settings": "com.android.settings",
+    "fortitoken": "com.fortinet.android.ftm",
+    "fortitoken-mobile": "com.fortinet.android.ftm",
+}
+
+
+def resolve_app_id(raw: str, platform: str) -> str:
+    key = (raw or "").strip()
+    if platform == "ios":
+        return APP_ALIASES_IOS.get(key.lower(), key)
+    if platform == "android":
+        return APP_ALIASES_ANDROID.get(key.lower(), key)
+    return key
+
+
+def activate_sequence_for_task(driver, platform: str, apps: Optional[List[str]]):
+    if not apps:
+        return
+    for app in apps:
+        bundle_or_pkg = resolve_app_id(app, platform)
+        try:
+            driver.activate_app(bundle_or_pkg)
+            sleep(0.6)
+        except Exception as e:
+            print(f"[activate] {bundle_or_pkg}: {e}")
+
+
+def process_next_action(action, driver: webdriver.Remote, folder, step_name):
+    data = json.loads(action)
+    platform = _get_platform(driver)
+    if data["action"] in ("error", "finish"):
+        take_page_source(driver, folder, step_name)
+        data["result"] = "success"
+        return (None, None, json.dumps(data))
+
+    try:
+        if data["action"] in ["tap", "click"] and "bounds" in data:
+            bounds = data["bounds"]
+            left, top, right, bottom = parse_bounds(bounds)
+            tap_x = left + (right - left) / 2
+            tap_y = top + (bottom - top) / 2
+            if platform == "web":
+                # Best-effort JS click at viewport coords
+                try:
+                    driver.execute_script(
+                        """
+                            const x = arguments[0], y = arguments[1];
+                            const el = document.elementFromPoint(x, y);
+                            if (el) el.click();
+                        """, int(tap_x), int(tap_y)
+                        )
+                    _maybe_switch_to_new_window(driver)
+                    data["result"] = "success"
+                except Exception as e:
+                    data["result"] = f"web coordinate click failed: {e}"
+            else:
+                driver.tap([(tap_x, tap_y)])
+                data["result"] = "success"
+
+        elif data["action"] in ["tap", "click"] and "xpath" in data:
+            xpath = data["xpath"]
+            elements = driver.find_elements(AppiumBy.XPATH, xpath)
+            if not elements:
+                data["result"] = f"can't find element {xpath}"
+            else:
+                before = []
+                if platform == "web":
+                    try:
+                        before = driver.window_handles[
+                                 :]  # snapshot window handles
+                    except Exception:
+                        before = []
+                elements[0].click()
+                if platform == "web":
+                    # If a new tab opened, switch to it; otherwise wait for load
+                    switched = _switch_if_new_window(driver, before)
+                    if not switched:
+                        _wait_for_ready(driver, timeout=8)
+                data["result"] = "success"
+
+        elif data["action"] == "swipe":
+            driver.swipe(
+                data["swipe_start_x"],
+                data["swipe_start_y"],
+                data["swipe_end_x"],
+                data["swipe_end_y"],
+                data["duration"],
+            )
+            sleep(data["duration"] / 1000)
+            data["result"] = "success"
+
+        elif data["action"] in ("activate", "activate_app"):
+            bundle_id = data.get("bundleId") or data.get("package") or data.get("app")
+            if not bundle_id:
+                data["result"] = "missing bundleId/package/app for activate_app"
+            else:
+                bundle_id = resolve_app_id(bundle_id, platform)
+                try:
+                    driver.activate_app(bundle_id)
+                    sleep(0.5)
+                    data["result"] = "success"
+                except Exception as e:
+                    data["result"] = f"activate_app failed: {e}"
+
+        elif data["action"] == "terminate_app":
+            bundle_id = data.get("bundleId") or data.get("package") or data.get("app")
+            if not bundle_id:
+                data["result"] = "missing bundleId/package/app for terminate_app"
+            else:
+                bundle_id = resolve_app_id(bundle_id, platform)
+                try:
+                    driver.terminate_app(bundle_id)
+                    data["result"] = "success"
+                except Exception as e:
+                    data["result"] = f"terminate_app failed: {e}"
+
+        elif data["action"] == "input" and "bounds" in data:
+            bounds = data["bounds"]
+            value = data["value"]
+            left, top, right, bottom = parse_bounds(bounds)
+            tap_x = left + (right - left) / 2
+            tap_y = top + (bottom - top) / 2
+            driver.tap([(tap_x, tap_y)])
+            target = _find_focused_element(driver, platform)
+            if target and _send_keys_safely(target, value, platform):
+                _hide_keyboard_safely(driver, platform)
+                data["result"] = "success"
+            else:
+                if platform == "ios":
+                    try:
+                        driver.execute_script("mobile: type", {"text": value})
+                        _hide_keyboard_safely(driver, platform)
+                        data["result"] = "success"
+                    except Exception:
+                        data["result"] = f"can't find focused element after tapping bounds {bounds}"
+                else:
+                    data["result"] = f"can't find focused element in bounds {bounds}"
+
+        elif data["action"] == "input" and "xpath" in data:
+            xpath = data["xpath"]
+            value = data["value"]
+            elements = driver.find_elements(AppiumBy.XPATH, xpath)
+            if not elements:
+                data["result"] = f"can't find element {xpath}"
+            else:
+                field = elements[0]
+                try:
+                    field.click()
+                except WebDriverException:
+                    pass
+                if _send_keys_safely(field, value, platform):
+                    _hide_keyboard_safely(driver, platform)
+                    data["result"] = "success"
+                else:
+                    fresh = _find_focused_element(driver, platform)
+                    if fresh and _send_keys_safely(fresh, value, platform):
+                        _hide_keyboard_safely(driver, platform)
+                        data["result"] = "success"
+                    else:
+                        if platform == "ios":
+                            try:
+                                driver.execute_script("mobile: type", {"text": value})
+                                _hide_keyboard_safely(driver, platform)
+                                data["result"] = "success"
+                            except Exception:
+                                data["result"] = f"can't find focused element after clicking {xpath}"
+                        else:
+                            data["result"] = f"can't find focused element after clicking {xpath}"
+        elif data["action"] == "navigate":
+            url = data.get("url")
+            if not url or not isinstance(url, str):
+                data["result"] = "missing or invalid 'url' for navigate"
+            else:
+                try:
+                    driver.get(url)
+                    # tiny settle time for dynamic pages
+                    sleep(0.5)
+                    data["result"] = "success"
+                except Exception as e:
+                    data["result"] = f"navigate failed: {e}"
+
+        elif data["action"] == "wait":
+            sleep(data["timeout"] / 1000)
+            data["result"] = "success"
+
+        else:
+            data["result"] = "unknown action"
+            return None, None, json.dumps(data)
+
+        return take_page_source(driver, folder, step_name), None, json.dumps(data)
+    except Exception as e:
+        data["result"] = f"exception: {e}"
+        return None, None, json.dumps(data)
+
+
+# -----------------------------
+# Misc helpers
+# -----------------------------
+def get_current_timestamp():
+    now = datetime.datetime.now()
+    return now.strftime("%Y-%m-%d-%H-%M-%S")
+
+
+def keep_driver_live(driver: webdriver.Remote):
+    try:
+        while driver:
+            _ = _safe_page_source(driver)
+            sleep(10)
     except Exception:
         pass
     try:
