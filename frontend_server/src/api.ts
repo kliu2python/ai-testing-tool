@@ -5,6 +5,19 @@ export const API_BASE_DEFAULT = "http://ai-ui-test.qa.fortinet-us.com:8090";
 
 type HttpMethod = "get" | "post" | "delete" | "patch";
 
+function normaliseBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const hasScheme = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(trimmed);
+  if (hasScheme) {
+    return trimmed;
+  }
+  return `http://${trimmed}`;
+}
+
 export async function apiRequest<T = unknown>(
   baseUrl: string,
   method: HttpMethod,
@@ -12,8 +25,9 @@ export async function apiRequest<T = unknown>(
   payload?: unknown,
   token?: string | null
 ): Promise<ApiResult<T>> {
+  const baseURL = normaliseBaseUrl(baseUrl).replace(/\/$/, "");
   const client = axios.create({
-    baseURL: baseUrl.replace(/\/$/, ""),
+    baseURL,
     headers: { "Content-Type": "application/json" }
   });
 
