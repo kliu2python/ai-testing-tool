@@ -15,6 +15,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
+import logging
+
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +39,8 @@ from backend_server.task_store import (
     register_task_run,
     set_task_status,
 )
+
+logger = logging.getLogger(__name__)
 
 # -----------------------------
 # Database & Auth helpers
@@ -468,11 +472,7 @@ def _ensure_reports_folder() -> None:
     try:
         _REPORTS_ROOT.mkdir(parents=True, exist_ok=True)
     except Exception as exc:  # pragma: no cover - filesystem issue
-        warning = "[WARN] Failed to create reports folder '%s': %s" % (
-            _REPORTS_ROOT,
-            exc,
-        )
-        print(warning)
+        logger.warning("Failed to create reports folder '%s': %s", _REPORTS_ROOT, exc)
 
 
 @app.on_event("startup")

@@ -1,8 +1,11 @@
 import json
+import logging
 import uuid
 from time import sleep
 
 from libraries.taas.base import Base
+
+logger = logging.getLogger(__name__)
 
 
 class Dhub(Base):
@@ -32,13 +35,13 @@ class Dhub(Base):
             if resp.status_code < 300:
                 resp_body = json.loads(resp.content)
                 self.pod_name = resp_body.get('pod_name')
-                print(f"emulator {self.pod_name} created")
+                logger.info("Emulator %s created", self.pod_name)
                 return True
             if retry < 0:
-                print("failed to create emulator after 5 retry")
+                logger.error("Failed to create emulator after retries")
                 return False
             retry -= 1
-            print("retry to create emulator pod")
+            logger.info("Retrying emulator creation")
 
     def delete_emulator(self, pod_name: str = None):
         if not pod_name:
@@ -56,7 +59,7 @@ class Dhub(Base):
             pod_name = self.pod_name
         endpoint = f'/dhub/emulator/check/{pod_name}'
         resp = self.get(endpoint)
-        print(f'the emulator status {resp}')
+        logger.debug("Emulator status response: %s", resp)
         if resp.status_code < 300:
             resp_body = json.loads(resp.content)
             count = 10
@@ -81,7 +84,7 @@ class Dhub(Base):
             results = resp_body.get('results')
             if not isinstance(results, str):
                 if results.get('status') in ['ready']:
-                    print(f"{pod_name} device is ready to use")
+                    logger.info("Device %s is ready to use", pod_name)
                     sleep(3)
                     break
             sleep(1)
@@ -145,8 +148,11 @@ class Dhub(Base):
             if isinstance(json.loads(resp.content), dict):
                 return json.loads(resp.content)["results"]
         else:
-            print(f'The code is {resp.status_code} and the reason is '
-                  f'{resp.content}')
+            logger.error(
+                "Failed to check FTC version: status=%s, body=%s",
+                resp.status_code,
+                resp.content,
+            )
             return "error when check version"
 
 
@@ -154,7 +160,7 @@ if __name__ == "__main__":
     dhub_client = Dhub("14")
     dhub_client.create_emulator()
     dhub_client.check_emulator()
-    print(f'{dhub_client.adb_port} and for pod {dhub_client.pod_name}')
+    logger.info("ADB port %s for pod %s", dhub_client.adb_port, dhub_client.pod_name)
     res = dhub_client.delete_emulator()
     if res:
-        print('deleted pod')
+        logger.info('Deleted pod')

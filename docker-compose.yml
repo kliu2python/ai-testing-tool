@@ -1,0 +1,50 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: ai-testing-tool-api
+    ports:
+      - "8090:8090"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL:-INFO}
+    volumes:
+      - backend-data:/data
+    depends_on:
+      - redis
+
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile.queue
+    image: ai-testing-tool-queue
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL:-INFO}
+    volumes:
+      - backend-data:/data
+    depends_on:
+      - redis
+
+  frontend:
+    build:
+      context: ./frontend_server
+    image: ai-testing-tool-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  backend-data:
+  redis-data:
