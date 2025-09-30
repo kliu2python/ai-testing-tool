@@ -105,6 +105,22 @@ npm run build
 which outputs static assets in `frontend_server/dist/`. Use `npm run preview` to test the
 production build locally.
 
+## Running the full stack with Docker Compose
+
+The repository now ships with a `docker-compose.yml` file that builds and launches
+the FastAPI backend, Redis queue worker, Redis itself, and the production Nginx
+frontend. The services share persistent volumes for the SQLite database and Redis
+data. To start everything with the Docker CLI, run:
+
+```sh
+docker compose up --build
+```
+
+The command exposes the API at `https://localhost:8090` (if TLS certificates are
+provided) and the frontend at `http://localhost:5173`. Environment variables such
+as `BACKEND_LOG_LEVEL` can be supplied to adjust logging verbosity for the backend
+and queue worker containers.
+
 
 ## Acknowledgements
 

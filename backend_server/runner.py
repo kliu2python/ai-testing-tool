@@ -5,6 +5,7 @@ import asyncio
 import base64
 import datetime
 import json
+import logging
 import os
 import re
 import threading
@@ -36,8 +37,12 @@ import yaml
 from dotenv import load_dotenv
 
 from libraries.taas.dhub import Dhub
+from backend_server.logging_config import configure_logging
 
 load_dotenv()
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,9 +77,9 @@ def read_file_content(file_path):
             content = file.read()
         return content
     except FileNotFoundError:
-        print(f"Error: The file '{file_path}' does not exist.")
+        logger.error("The file '%s' does not exist.", file_path)
     except IOError:
-        print(f"Error: Unable to read the file '{file_path}'.")
+        logger.error("Unable to read the file '%s'.", file_path)
 
 
 def create_folder(folder_path):
@@ -248,9 +253,7 @@ def create_driver(_server, _platform="android",
             if _needs_wd_hub_retry(exc):
                 fallback = _append_wd_hub(server)
                 if fallback != server:
-                    print(
-                        "[INFO] Retrying Appium connection with '/wd/hub' base path",
-                    )
+                    logger.info("Retrying Appium connection with '/wd/hub' base path")
                     return _connect(fallback)
             raise
 
@@ -282,9 +285,7 @@ def create_driver(_server, _platform="android",
             if _needs_wd_hub_retry(exc):
                 fallback = _append_wd_hub(server)
                 if fallback != server:
-                    print(
-                        "[INFO] Retrying Appium connection with '/wd/hub' base path",
-                    )
+                    logger.info("Retrying Appium connection with '/wd/hub' base path")
                     return _connect(fallback)
             raise
 
@@ -300,7 +301,7 @@ def create_driver(_server, _platform="android",
         node_ready = False
         while count > 0:
             status = dhub_obj.check_selenium_node()
-            print(f"check status {status}")
+            logger.debug("Selenium node readiness status: %s", status)
             if status:
                 node_ready = True
                 break
@@ -791,7 +792,7 @@ def activate_sequence_for_task(driver, platform: str, apps: Optional[List[str]])
             driver.activate_app(bundle_or_pkg)
             sleep(0.6)
         except Exception as e:
-            print(f"[activate] {bundle_or_pkg}: {e}")
+            logger.warning("Failed to activate %s: %s", bundle_or_pkg, e)
 
 
 def process_next_action(action, driver: webdriver.Remote, folder, step_name):
@@ -976,7 +977,7 @@ def keep_driver_live(driver: webdriver.Remote):
             _ = _safe_page_source(driver)
             sleep(10)
     except Exception:
-        print("closing thread.")
+        logger.debug("Driver keep-alive thread exiting")
 
 
 def generate_summary_report(reports_folder: str, summary: List[dict]) -> str:
@@ -1004,19 +1005,27 @@ def _run_tasks(
     thread = threading.Thread(target=lambda: keep_driver_live(driver), daemon=True)
     thread.start()
 
+    logger.info(
+        "Starting run %s with %d task(s) on %s via %s",
+        run_identifier,
+        len(tasks),
+        platform,
+        server,
+    )
+
     summary: List[dict] = []
     summary_path = ""
 
     try:
         for task in tasks:
-            print(task)
+            logger.debug("Task payload: %s", task)
             name = task["name"]
             details = task["details"]
             skip = task.get("skip", False)
             scope = task.get("scope", "functional")
             steps = task.get("steps")
             if skip:
-                print(f"skip {name}")
+                logger.info("Skipping task '%s'", name)
                 continue
 
             reports_path = os.path.join(reports_folder, name, run_identifier)
@@ -1079,7 +1088,7 @@ def _run_tasks(
                             page_screenshot_for_next_step,
                         )
 
-                    print(f"{step}: {next_action}")
+                    logger.debug("Step %s: %s", step, next_action)
 
                     (
                         page_source_for_next_step,
@@ -1104,6 +1113,7 @@ def _run_tasks(
             summary_path = generate_summary_report(summary_folder, summary)
     finally:
         driver.quit()
+        logger.info("Finished run %s", run_identifier)
 
     return RunResult(summary=summary, summary_path=summary_path)
 
@@ -1194,13 +1204,13 @@ if __name__ == "__main__":
     thread.start()
 
     for i, task in enumerate(tasks):
-        print(task)
+        logger.debug("Task payload: %s", task)
         name = task.get("name", f"task_{i+1}")
         details = task.get("details", "")
         skip = task.get("skip", False)
         apps = task.get("apps") or []  # <---- per-task app activation order
         if skip:
-            print(f"skip {name}")
+            logger.info("Skipping task '%s'", name)
             continue
 
         task_folder = create_folder(f"{reports_folder}/{name}/{get_current_timestamp()}")
@@ -1235,7 +1245,7 @@ if __name__ == "__main__":
                     page_source_for_next_step
                 )
 
-            print(f"{step}: {next_action}")
+            logger.debug("Step %s: %s", step, next_action)
 
             (page_source_for_next_step,
                 _page_screenshot_for_next_step,

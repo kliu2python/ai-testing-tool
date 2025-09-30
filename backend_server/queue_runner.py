@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import signal
 from typing import Any, Dict, Optional
 
 from redis import RedisError
 
+from backend_server.logging_config import configure_logging
 from backend_server.runner import _run_tasks
 from backend_server.task_queue import (
     create_redis_client,
@@ -16,6 +18,10 @@ from backend_server.task_queue import (
     status_key,
 )
 from backend_server.task_store import set_task_status
+
+configure_logging()
+
+logger = logging.getLogger(__name__)
 
 
 def _update_status(
@@ -39,6 +45,7 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
     task_id = task["task_id"]
     owner_id: Optional[str] = task.get("user_id")
     base_reports_folder = task.get("reports_folder") or "./reports"
+    logger.info("Starting task %s for user %s", task_id, owner_id or "<anonymous>")
     _update_status(redis_client, task_id, {"status": "running"}, owner_id)
     set_task_status(
         task_id,
@@ -60,6 +67,7 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
             task_id=task_id,
         )
     except Exception as exc:  # pragma: no cover - background safety net
+        logger.exception("Task %s failed: %s", task_id, exc)
         _update_status(
             redis_client,
             task_id,
@@ -93,6 +101,7 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
         user_id=owner_id,
         reports_root=base_reports_folder,
     )
+    logger.info("Completed task %s", task_id)
 
 
 def main() -> None:
@@ -114,9 +123,9 @@ def main() -> None:
             _, raw_task = item
             _process_task(redis_client, raw_task)
     except KeyboardInterrupt:
-        print("Shutting down queue runner")
+        logger.info("Shutting down queue runner")
     except RedisError as exc:  # pragma: no cover - operational errors
-        print(f"[ERROR] Redis interaction failed: {exc}")
+        logger.error("Redis interaction failed: %s", exc)
     finally:
         redis_client.close()
 
