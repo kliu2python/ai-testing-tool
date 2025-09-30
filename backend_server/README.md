@@ -59,6 +59,25 @@ curl -X POST "http://<server-ip>:8090/run" \
 The response returns the aggregated summary along with the path to the generated
 `summary.json` report inside the reports directory.
 
+### Enabling HTTPS/TLS
+
+The backend can serve traffic over HTTPS by providing certificate details through
+environment variables when launching the API (either with `python
+backend_server/api.py` or via Uvicorn directly):
+
+```sh
+APP_SSL_CERTFILE=/path/to/cert.pem \
+APP_SSL_KEYFILE=/path/to/key.pem \
+APP_SSL_CA_CERTS=/path/to/ca-bundle.pem \  # optional
+APP_SSL_KEYFILE_PASSWORD=secret \          # optional
+python -m backend_server.api
+```
+
+Both `APP_SSL_CERTFILE` and `APP_SSL_KEYFILE` must be supplied to enable TLS.
+Optional `APP_SSL_CA_CERTS` and `APP_SSL_KEYFILE_PASSWORD` values are respected
+when present. When these variables are set the server automatically exposes HTTPS
+on the configured port.
+
 ## Web Frontend
 
 A modern React and TypeScript frontend is available in the `frontend_server/` directory.

@@ -859,10 +859,54 @@ if __name__ == "__main__":
 
     import uvicorn
 
+    def _resolve_ssl_path(value: Optional[str], env_name: str) -> Optional[str]:
+        """Validate and normalise SSL-related file paths from the environment."""
+
+        if not value:
+            return None
+
+        candidate = Path(value).expanduser()
+        if not candidate.is_file():
+            raise SystemExit(
+                f"Environment variable {env_name} references missing file: {candidate}"
+            )
+        return str(candidate)
+
+    ssl_certfile = _resolve_ssl_path(os.getenv("APP_SSL_CERTFILE"), "APP_SSL_CERTFILE")
+    ssl_keyfile = _resolve_ssl_path(os.getenv("APP_SSL_KEYFILE"), "APP_SSL_KEYFILE")
+    ssl_ca_certs = _resolve_ssl_path(os.getenv("APP_SSL_CA_CERTS"), "APP_SSL_CA_CERTS")
+    ssl_keyfile_password = os.getenv("APP_SSL_KEYFILE_PASSWORD")
+
+    ssl_options: Dict[str, Any] = {}
+    if ssl_certfile and ssl_keyfile:
+        ssl_options.update(
+            {
+                "ssl_certfile": ssl_certfile,
+                "ssl_keyfile": ssl_keyfile,
+            }
+        )
+        if ssl_keyfile_password:
+            ssl_options["ssl_keyfile_password"] = ssl_keyfile_password
+        if ssl_ca_certs:
+            ssl_options["ssl_ca_certs"] = ssl_ca_certs
+    elif ssl_certfile or ssl_keyfile:
+        raise SystemExit(
+            "Both APP_SSL_CERTFILE and APP_SSL_KEYFILE must be provided to enable HTTPS."
+        )
+    elif ssl_ca_certs:
+        raise SystemExit(
+            "APP_SSL_CA_CERTS is only valid when TLS is enabled via cert and key files."
+        )
+    elif ssl_keyfile_password:
+        raise SystemExit(
+            "APP_SSL_KEYFILE_PASSWORD is only valid when TLS is enabled via cert and key files."
+        )
+
     uvicorn.run(
         "api:app",
         host=host,
         port=port,
         reload=reload_opt,
         log_level=os.getenv("APP_LOG_LEVEL", "info"),
+        **ssl_options,
     )
