@@ -1,7 +1,23 @@
 import axios, { AxiosError } from "axios";
 import type { ApiResult } from "./types";
 
-export const API_BASE_DEFAULT = "http://10.160.13.110:8090";
+function resolveDefaultApiBase(): string {
+  const envBase = import.meta?.env?.VITE_API_BASE_URL;
+  if (typeof envBase === "string" && envBase.trim()) {
+    return envBase.trim().replace(/\/$/, "");
+  }
+
+  if (typeof window !== "undefined") {
+    const { origin, protocol } = window.location;
+    if (protocol === "https:") {
+      return origin.replace(/\/$/, "");
+    }
+  }
+
+  return "http://10.160.13.110:8090";
+}
+
+export const API_BASE_DEFAULT = resolveDefaultApiBase();
 
 type HttpMethod = "get" | "post" | "delete" | "patch";
 
