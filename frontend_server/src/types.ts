@@ -7,6 +7,8 @@ export interface ApiResult<T = unknown> {
   error?: string;
 }
 
+export type LlmMode = "auto" | "text" | "vision";
+
 export interface AuthenticatedUser {
   id: string;
   email: string;
@@ -27,6 +29,7 @@ export interface RunTaskPayload {
   reports_folder: string;
   debug: boolean;
   repeat: number;
+  llm_mode: LlmMode;
 }
 
 export interface NotificationState {

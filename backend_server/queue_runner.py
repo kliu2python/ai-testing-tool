@@ -65,6 +65,7 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
             reports_folder,
             task["debug"],
             task_id=task_id,
+            llm_mode=task.get("llm_mode"),
         )
     except Exception as exc:  # pragma: no cover - background safety net
         logger.exception("Task %s failed: %s", task_id, exc)
