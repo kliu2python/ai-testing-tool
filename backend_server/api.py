@@ -39,6 +39,7 @@ from backend_server.task_store import (
     load_task_run,
     register_task_run,
     set_task_status,
+    update_task_request,
 )
 
 logger = logging.getLogger(__name__)
@@ -847,6 +848,57 @@ async def get_task_result(
         raise HTTPException(status_code=202, detail="Task is still in progress")
     steps = _build_step_images(status.summary_path)
     return status.copy(update={"steps": steps})
+
+
+@app.get(
+    "/tasks/{task_name}/request",
+    response_model=RunRequest,
+    summary="Retrieve stored task configuration",
+)
+async def get_task_request(
+    task_name: str, current_user: User = Depends(get_current_user)
+) -> RunRequest:
+    """Return the most recent stored configuration for ``task_name``."""
+
+    owner_filter = None if current_user.is_admin else current_user.id
+    record = load_latest_task_request(task_name, owner_filter)
+    if record is None or not record.get("payload"):
+        raise HTTPException(status_code=404, detail="Task configuration not found")
+
+    try:
+        return RunRequest(**record["payload"])
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Stored task configuration is invalid",
+        ) from exc
+
+
+@app.put(
+    "/tasks/{task_name}/request",
+    response_model=RunRequest,
+    summary="Update stored task configuration",
+)
+async def update_task_request_endpoint(
+    task_name: str,
+    request: RunRequest,
+    current_user: User = Depends(get_current_user),
+) -> RunRequest:
+    """Persist a modified configuration for ``task_name``."""
+
+    owner_filter = None if current_user.is_admin else current_user.id
+    record = load_latest_task_request(task_name, owner_filter)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Task configuration not found")
+
+    if not current_user.is_admin and record.get("user_id") != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorised to modify this task")
+
+    try:
+        update_task_request(record["task_id"], request.tasks, request.dict())
+    except ValueError as exc:  # pragma: no cover - defensive guard
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return request
 
 
 @app.post(

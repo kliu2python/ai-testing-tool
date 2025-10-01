@@ -24,8 +24,9 @@ import TaskIcon from "@mui/icons-material/Task";
 import InsightsIcon from "@mui/icons-material/Insights";
 import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
 import ReplayIcon from "@mui/icons-material/Replay";
+import EditIcon from "@mui/icons-material/Edit";
 
-import { 
+import {
   apiRequest,
   formatPayload
 } from "../api";
@@ -33,12 +34,14 @@ import type {
   AuthenticatedUser,
   NotificationState,
   RunResponse,
+  RunTaskPayload,
   StepInfo,
   TaskCollectionResponse,
   TaskStatusResponse,
   TaskListEntry
 } from "../types";
 import JsonOutput from "./JsonOutput";
+import TaskEditDialog from "./TaskEditDialog";
 
 interface TaskManagementPanelProps {
   baseUrl: string;
@@ -66,6 +69,13 @@ export default function TaskManagementPanel({
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [rerunningName, setRerunningName] = useState<string | null>(null);
+  const [editingTaskName, setEditingTaskName] = useState<string | null>(null);
+  const [editingPayload, setEditingPayload] = useState<RunTaskPayload | null>(
+    null
+  );
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editDialogLoading, setEditDialogLoading] = useState(false);
+  const [editDialogSaving, setEditDialogSaving] = useState(false);
 
   const assetBase = useMemo(() => baseUrl.replace(/\/$/, ""), [baseUrl]);
 
@@ -341,6 +351,73 @@ export default function TaskManagementPanel({
 
   const disableActions = loading || Boolean(deletingId) || Boolean(rerunningName);
 
+  const editingInProgress =
+    editDialogOpen && (editDialogLoading || editDialogSaving);
+
+  const disableModifyButton = disableActions || editingInProgress;
+
+  function closeEditDialog() {
+    if (editDialogSaving) {
+      return;
+    }
+    setEditDialogOpen(false);
+    setEditingTaskName(null);
+    setEditingPayload(null);
+    setEditDialogLoading(false);
+  }
+
+  async function openEditDialog(taskName: string) {
+    const authToken = requireToken();
+    if (!authToken) {
+      return;
+    }
+    setEditingTaskName(taskName);
+    setEditDialogOpen(true);
+    setEditDialogLoading(true);
+    const result = await apiRequest<RunTaskPayload>(
+      baseUrl,
+      "get",
+      `/tasks/${encodeURIComponent(taskName)}/request`,
+      undefined,
+      authToken
+    );
+    setEditDialogLoading(false);
+    if (result.ok && result.data) {
+      setEditingPayload(result.data);
+    } else {
+      const message = result.error ?? `Request failed with ${result.status}`;
+      onNotify({ message, severity: "error" });
+      closeEditDialog();
+    }
+  }
+
+  async function saveTaskEdits(payload: RunTaskPayload) {
+    if (!editingTaskName) {
+      return;
+    }
+    const authToken = requireToken();
+    if (!authToken) {
+      return;
+    }
+    setEditDialogSaving(true);
+    const result = await apiRequest<RunTaskPayload>(
+      baseUrl,
+      "put",
+      `/tasks/${encodeURIComponent(editingTaskName)}/request`,
+      payload,
+      authToken
+    );
+    setEditDialogSaving(false);
+    if (result.ok) {
+      onNotify({ message: "Task configuration updated", severity: "success" });
+      closeEditDialog();
+      await refreshTasks();
+    } else {
+      const message = result.error ?? `Request failed with ${result.status}`;
+      onNotify({ message, severity: "error" });
+    }
+  }
+
   async function rerunTask(taskName: string) {
     const authToken = requireToken();
     if (!authToken) {
@@ -527,17 +604,32 @@ export default function TaskManagementPanel({
                       </Stack>
                     </TableCell>
                     <TableCell align="right">
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        startIcon={<ReplayIcon fontSize="small" />}
-                        onClick={() => rerunTask(group.task_name)}
-                        disabled={
-                          disableActions || rerunningName === group.task_name
-                        }
+                      <Stack
+                        direction="row"
+                        spacing={1}
+                        justifyContent="flex-end"
                       >
-                        Rerun
-                      </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<EditIcon fontSize="small" />}
+                          onClick={() => openEditDialog(group.task_name)}
+                          disabled={disableModifyButton}
+                        >
+                          Modify
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<ReplayIcon fontSize="small" />}
+                          onClick={() => rerunTask(group.task_name)}
+                          disabled={
+                            disableActions || rerunningName === group.task_name
+                          }
+                        >
+                          Rerun
+                        </Button>
+                      </Stack>
                     </TableCell>
                   </TableRow>
                 ))
@@ -607,6 +699,15 @@ export default function TaskManagementPanel({
           </Stack>
         )}
       </Stack>
+      <TaskEditDialog
+        open={editDialogOpen}
+        taskName={editingTaskName}
+        initialPayload={editingPayload}
+        loading={editDialogLoading}
+        saving={editDialogSaving}
+        onCancel={closeEditDialog}
+        onSubmit={saveTaskEdits}
+      />
     </Stack>
   );
 }

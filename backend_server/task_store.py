@@ -348,6 +348,62 @@ def load_latest_task_request(
         conn.close()
 
 
+def update_task_request(
+    run_id: str,
+    tasks: Sequence[Dict[str, Any]],
+    request_payload: Dict[str, Any],
+) -> None:
+    """Persist an updated request payload for ``run_id``."""
+
+    conn = _connect()
+    try:
+        ensure_task_tables(conn)
+        cursor = conn.execute(
+            "SELECT reports_root, created_at FROM task_runs WHERE id = ?",
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError(f"Unknown task run identifier: {run_id}")
+
+        reports_root = row["reports_root"] or "./reports"
+        created_at = row["created_at"]
+        now = dt.datetime.utcnow().isoformat()
+        request_json = json.dumps(request_payload)
+        reports_root_norm = _normalise_path(reports_root)
+
+        conn.execute(
+            """
+            UPDATE task_runs
+               SET request_json = ?,
+                   updated_at = ?
+             WHERE id = ?
+            """,
+            (request_json, now, run_id),
+        )
+
+        conn.execute("DELETE FROM task_entries WHERE run_id = ?", (run_id,))
+
+        for task in tasks:
+            name = task.get("name") or "unnamed"
+            details = task.get("details")
+            scope = task.get("scope")
+            reports_path = _normalise_path(os.path.join(reports_root_norm, name, run_id))
+            conn.execute(
+                """
+                INSERT INTO task_entries (
+                    run_id, name, details, scope, reports_path, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (run_id, name, details, scope, reports_path, created_at, now),
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def list_task_runs_for_user(user_id: Optional[str]) -> Iterable[Dict[str, Any]]:
     """Yield task run identifiers and statuses for ``user_id``."""
 

@@ -3,7 +3,7 @@ import type { ApiResult } from "./types";
 
 export const API_BASE_DEFAULT = "https://ai-test.qa.fortinet-us.com:8090";
 
-type HttpMethod = "get" | "post" | "delete" | "patch";
+type HttpMethod = "get" | "post" | "delete" | "patch" | "put";
 
 export async function apiRequest<T = unknown>(
   baseUrl: string,
