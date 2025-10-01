@@ -23,39 +23,51 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(
+    conn: sqlite3.Connection, table: str, column: str, definition: str
+) -> None:
+    """Add ``column`` to ``table`` when it does not yet exist."""
+
+    cursor = conn.execute(f"PRAGMA table_info({table})")
+    if column not in {row[1] for row in cursor.fetchall()}:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def ensure_task_tables(conn: sqlite3.Connection) -> None:
     """Create task-related tables if they do not already exist."""
 
     conn.executescript(
         """
-        CREATE TABLE IF NOT EXISTS task_runs (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            status TEXT NOT NULL,
-            reports_root TEXT NOT NULL,
-            summary_path TEXT,
-            summary_json TEXT,
-            error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
+    CREATE TABLE IF NOT EXISTS task_runs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        reports_root TEXT NOT NULL,
+        summary_path TEXT,
+        summary_json TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
 
-        CREATE TABLE IF NOT EXISTS task_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            details TEXT,
-            scope TEXT,
-            result_json TEXT,
-            reports_path TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(run_id, name),
-            FOREIGN KEY(run_id) REFERENCES task_runs(id) ON DELETE CASCADE
-        );
-        """
+    CREATE TABLE IF NOT EXISTS task_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        details TEXT,
+        scope TEXT,
+        result_json TEXT,
+        reports_path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(run_id, name),
+        FOREIGN KEY(run_id) REFERENCES task_runs(id) ON DELETE CASCADE
+    );
+    """
     )
+
+    _ensure_column(conn, "task_runs", "request_json", "TEXT")
 
 
 def _normalise_path(path: str) -> str:
@@ -74,11 +86,14 @@ def register_task_run(
     user_id: str,
     reports_root: str,
     tasks: Sequence[Dict[str, Any]],
+    request_payload: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Persist a queued task run and its individual task entries."""
 
     now = dt.datetime.utcnow().isoformat()
     reports_root_norm = _normalise_path(reports_root or "./reports")
+
+    request_json = json.dumps(request_payload) if request_payload is not None else None
 
     conn = _connect()
     try:
@@ -86,16 +101,26 @@ def register_task_run(
         conn.execute(
             """
             INSERT INTO task_runs (
-                id, user_id, status, reports_root, created_at, updated_at
+                id, user_id, status, reports_root, request_json, created_at,
+                updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 user_id=excluded.user_id,
                 status=excluded.status,
                 reports_root=excluded.reports_root,
+                request_json=excluded.request_json,
                 updated_at=excluded.updated_at
             """,
-            (task_id, user_id, "pending", reports_root_norm, now, now),
+            (
+                task_id,
+                user_id,
+                "pending",
+                reports_root_norm,
+                request_json,
+                now,
+                now,
+            ),
         )
 
         for task in tasks:
@@ -262,6 +287,43 @@ def load_task_names(task_ids: Sequence[str]) -> Dict[str, str]:
             name = row["name"] or "unnamed"
             names[run_id] = name
         return names
+    finally:
+        conn.close()
+
+
+def load_latest_task_request(
+    task_name: str, user_id: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Return the most recent stored request payload for ``task_name``."""
+
+    conn = _connect()
+    try:
+        ensure_task_tables(conn)
+        query = (
+            """
+            SELECT tr.id, tr.user_id, tr.request_json
+              FROM task_runs AS tr
+              JOIN task_entries AS te ON te.run_id = tr.id
+             WHERE te.name = ?
+            """
+        )
+        params: List[Any] = [task_name]
+        if user_id is not None:
+            query += " AND tr.user_id = ?"
+            params.append(user_id)
+        query += " ORDER BY tr.created_at DESC LIMIT 1"
+        cursor = conn.execute(query, tuple(params))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        raw_payload = row["request_json"]
+        if not raw_payload:
+            return None
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            return None
+        return {"task_id": row["id"], "user_id": row["user_id"], "payload": payload}
     finally:
         conn.close()
 
