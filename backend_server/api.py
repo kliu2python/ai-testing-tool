@@ -35,7 +35,7 @@ from backend_server.task_store import (
     ensure_task_tables,
     list_task_runs_for_user,
     load_latest_task_request,
-    load_task_names,
+    load_task_metadata,
     load_task_run,
     register_task_run,
     set_task_status,
@@ -400,6 +400,14 @@ class TaskListEntry(BaseModel):
 
     task_id: str = Field(..., description="Unique identifier for the queued task.")
     task_name: str = Field(..., description="Declared name of the queued task.")
+    created_at: Optional[str] = Field(
+        default=None,
+        description="ISO 8601 timestamp recording when the task was queued.",
+    )
+    updated_at: Optional[str] = Field(
+        default=None,
+        description="ISO 8601 timestamp recording the last known update.",
+    )
 
 
 class TaskCollectionResponse(BaseModel):
@@ -689,11 +697,21 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
     for record in records:
         all_task_ids.add(record["id"])
 
-    names = load_task_names(tuple(all_task_ids))
+    metadata = load_task_metadata(tuple(all_task_ids))
+    record_lookup = {record["id"]: record for record in records}
 
     def _entry(task_id: str) -> TaskListEntry:
-        name = names.get(task_id, "unnamed")
-        return TaskListEntry(task_id=task_id, task_name=name)
+        info = metadata.get(task_id, {})
+        record = record_lookup.get(task_id, {})
+        name = info.get("task_name") or "unnamed"
+        created_at = info.get("created_at") or record.get("created_at")
+        updated_at = info.get("updated_at") or record.get("updated_at")
+        return TaskListEntry(
+            task_id=task_id,
+            task_name=name,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
 
     for task_id, status_value in redis_statuses.items():
         if status_value == TaskStatus.completed.value:
@@ -718,6 +736,12 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
             grouped["running"].append(_entry(task_id))
         elif status_value == TaskStatus.failed.value:
             grouped["error"].append(_entry(task_id))
+
+    for entries in grouped.values():
+        entries.sort(
+            key=lambda entry: (entry.updated_at or entry.created_at or ""),
+            reverse=True,
+        )
 
     return TaskCollectionResponse(**grouped)
 

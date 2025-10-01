@@ -264,8 +264,10 @@ def load_task_run(task_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
-def load_task_names(task_ids: Sequence[str]) -> Dict[str, str]:
-    """Return the declared task name for each ``task_id`` in ``task_ids``."""
+def load_task_metadata(
+    task_ids: Sequence[str],
+) -> Dict[str, Dict[str, Optional[str]]]:
+    """Return stored metadata for each ``task_id`` in ``task_ids``."""
 
     if not task_ids:
         return {}
@@ -275,20 +277,38 @@ def load_task_names(task_ids: Sequence[str]) -> Dict[str, str]:
         ensure_task_tables(conn)
         placeholders = ",".join("?" for _ in task_ids)
         query = (
-            "SELECT run_id, name FROM task_entries "
-            f"WHERE run_id IN ({placeholders}) ORDER BY run_id, id"
+            """
+            SELECT te.run_id,
+                   te.name,
+                   tr.created_at,
+                   tr.updated_at
+              FROM task_entries AS te
+              JOIN task_runs AS tr ON te.run_id = tr.id
+             WHERE te.run_id IN ({placeholders})
+          ORDER BY te.run_id, te.id
+            """.format(placeholders=placeholders)
         )
         cursor = conn.execute(query, tuple(task_ids))
-        names: Dict[str, str] = {}
+        metadata: Dict[str, Dict[str, Optional[str]]] = {}
         for row in cursor:
             run_id = row["run_id"]
-            if run_id in names:
+            if run_id in metadata:
                 continue
-            name = row["name"] or "unnamed"
-            names[run_id] = name
-        return names
+            metadata[run_id] = {
+                "task_name": (row["name"] or "unnamed"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+        return metadata
     finally:
         conn.close()
+
+
+def load_task_names(task_ids: Sequence[str]) -> Dict[str, str]:
+    """Return the declared task name for each ``task_id`` in ``task_ids``."""
+
+    metadata = load_task_metadata(task_ids)
+    return {task_id: info.get("task_name", "unnamed") for task_id, info in metadata.items()}
 
 
 def load_latest_task_request(
@@ -328,7 +348,7 @@ def load_latest_task_request(
         conn.close()
 
 
-def list_task_runs_for_user(user_id: Optional[str]) -> Iterable[Dict[str, str]]:
+def list_task_runs_for_user(user_id: Optional[str]) -> Iterable[Dict[str, Any]]:
     """Yield task run identifiers and statuses for ``user_id``."""
 
     conn = _connect()
@@ -336,12 +356,15 @@ def list_task_runs_for_user(user_id: Optional[str]) -> Iterable[Dict[str, str]]:
         ensure_task_tables(conn)
         if user_id is None:
             cursor = conn.execute(
-                "SELECT id, user_id, status FROM task_runs ORDER BY created_at DESC"
+                (
+                    "SELECT id, user_id, status, created_at, updated_at "
+                    "FROM task_runs ORDER BY created_at DESC"
+                )
             )
         else:
             cursor = conn.execute(
                 """
-                SELECT id, user_id, status
+                SELECT id, user_id, status, created_at, updated_at
                   FROM task_runs
                  WHERE user_id = ?
               ORDER BY created_at DESC
@@ -350,7 +373,13 @@ def list_task_runs_for_user(user_id: Optional[str]) -> Iterable[Dict[str, str]]:
             )
 
         for row in cursor:
-            yield {"id": row["id"], "user_id": row["user_id"], "status": row["status"]}
+            yield {
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
     finally:
         conn.close()
 
