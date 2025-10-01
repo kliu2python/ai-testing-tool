@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Box,
   Button,
@@ -84,9 +84,16 @@ export default function TaskManagementPanel({
     []
   );
 
+  interface TaskGroupRun {
+    task_id: string;
+    status: TaskStatusKey;
+    created_at?: string | null;
+    updated_at?: string | null;
+  }
+
   interface TaskGroup {
     task_name: string;
-    runs: { task_id: string; status: TaskStatusKey }[];
+    runs: TaskGroupRun[];
   }
 
   const groupedTasks = useMemo<TaskGroup[]>(() => {
@@ -104,7 +111,12 @@ export default function TaskManagementPanel({
     const addEntry = (status: TaskStatusKey, entry: TaskListEntry) => {
       const key = entry.task_name || "unnamed";
       const existing = groups.get(key);
-      const run = { task_id: entry.task_id, status };
+      const run: TaskGroupRun = {
+        task_id: entry.task_id,
+        status,
+        created_at: entry.created_at,
+        updated_at: entry.updated_at,
+      };
       if (existing) {
         existing.runs.push(run);
       } else {
@@ -116,10 +128,86 @@ export default function TaskManagementPanel({
       tasks[status].forEach((entry) => addEntry(status, entry));
     });
 
-    return Array.from(groups.values()).sort((a, b) =>
+    const parseTimestamp = (value?: string | null) => {
+      if (!value) {
+        return Number.NaN;
+      }
+      const parsed = Date.parse(value);
+      return Number.isNaN(parsed) ? Number.NaN : parsed;
+    };
+
+    const withSortedRuns = Array.from(groups.values()).map((group) => {
+      const sortedRuns = [...group.runs].sort((a, b) => {
+        const aTime = parseTimestamp(a.updated_at ?? a.created_at);
+        const bTime = parseTimestamp(b.updated_at ?? b.created_at);
+        if (Number.isNaN(aTime) && Number.isNaN(bTime)) {
+          return a.task_id.localeCompare(b.task_id);
+        }
+        if (Number.isNaN(aTime)) {
+          return 1;
+        }
+        if (Number.isNaN(bTime)) {
+          return -1;
+        }
+        return aTime - bTime;
+      });
+      return { ...group, runs: sortedRuns };
+    });
+
+    return withSortedRuns.sort((a, b) =>
       a.task_name.localeCompare(b.task_name)
     );
   }, [tasks]);
+
+  const shortDateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+      }),
+    []
+  );
+
+  const longDateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      }),
+    []
+  );
+
+  const formatTimestamp = useCallback(
+    (value?: string | null, options?: { long?: boolean }) => {
+      if (!value) {
+        return null;
+      }
+      const parsed = Date.parse(value);
+      if (Number.isNaN(parsed)) {
+        return value;
+      }
+      const formatter = options?.long ? longDateFormatter : shortDateFormatter;
+      return formatter.format(new Date(parsed));
+    },
+    [longDateFormatter, shortDateFormatter]
+  );
+
+  const timestampPrefix = useCallback((status: TaskStatusKey) => {
+    if (status === "completed" || status === "error") {
+      return "Last updated";
+    }
+    if (status === "running") {
+      return "Started";
+    }
+    return "Queued";
+  }, []);
 
   function requireToken(): string | null {
     if (!token) {
@@ -359,11 +447,58 @@ export default function TaskManagementPanel({
                     <TableCell>
                       <Stack direction="row" spacing={1} flexWrap="wrap">
                         {group.runs.map((run) => {
-                          const label = `${statusMeta[run.status].label} • ${run.task_id}`;
+                          const statusLabel = statusMeta[run.status].label;
+                          const timestamp = run.updated_at ?? run.created_at;
+                          const shortTimestamp =
+                            formatTimestamp(timestamp) ?? "Unknown time";
+                          const longTimestamp =
+                            formatTimestamp(timestamp, { long: true }) ??
+                            "Unknown time";
+                          const timingPrefix = timestampPrefix(run.status);
+                          const label = [
+                            statusLabel,
+                            shortTimestamp,
+                            run.task_id
+                          ].join(" • ");
                           const isSelected = taskId.trim() === run.task_id;
                           const canDelete = !disableActions && deletingId !== run.task_id;
                           return (
-                            <Tooltip title="Click to select or delete" key={run.task_id}>
+                            <Tooltip
+                              key={run.task_id}
+                              arrow
+                              title={
+                                <Stack spacing={0.5}>
+                                  <Typography
+                                    variant="caption"
+                                    component="span"
+                                    color="inherit"
+                                  >
+                                    Status: {statusLabel}
+                                  </Typography>
+                                  <Typography
+                                    variant="caption"
+                                    component="span"
+                                    color="inherit"
+                                  >
+                                    {timingPrefix}: {longTimestamp}
+                                  </Typography>
+                                  <Typography
+                                    variant="caption"
+                                    component="span"
+                                    color="inherit"
+                                  >
+                                    Task ID: {run.task_id}
+                                  </Typography>
+                                  <Typography
+                                    variant="caption"
+                                    component="span"
+                                    color="inherit"
+                                  >
+                                    Click to select or delete.
+                                  </Typography>
+                                </Stack>
+                              }
+                            >
                               <Chip
                                 label={label}
                                 color={statusMeta[run.status].color}

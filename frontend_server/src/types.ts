@@ -53,6 +53,8 @@ export interface TaskStatusResponse {
 export interface TaskListEntry {
   task_id: string;
   task_name: string;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface TaskCollectionResponse {
