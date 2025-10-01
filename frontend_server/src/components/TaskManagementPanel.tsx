@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Box,
   Button,
@@ -25,6 +25,8 @@ import InsightsIcon from "@mui/icons-material/Insights";
 import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
 import ReplayIcon from "@mui/icons-material/Replay";
 import EditIcon from "@mui/icons-material/Edit";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 
 import {
   apiRequest,
@@ -76,6 +78,7 @@ export default function TaskManagementPanel({
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editDialogLoading, setEditDialogLoading] = useState(false);
   const [editDialogSaving, setEditDialogSaving] = useState(false);
+  const [expandedTasks, setExpandedTasks] = useState<Record<string, boolean>>({});
 
   const assetBase = useMemo(() => baseUrl.replace(/\/$/, ""), [baseUrl]);
 
@@ -168,6 +171,19 @@ export default function TaskManagementPanel({
       a.task_name.localeCompare(b.task_name)
     );
   }, [tasks]);
+
+  useEffect(() => {
+    setExpandedTasks({});
+  }, [groupedTasks]);
+
+  const toggleTaskRuns = useCallback((taskName: string) => {
+    setExpandedTasks((previous) => ({
+      ...previous,
+      [taskName]: !previous[taskName]
+    }));
+  }, []);
+
+  const collapseThreshold = 10;
 
   const shortDateFormatter = useMemo(
     () =>
@@ -522,13 +538,24 @@ export default function TaskManagementPanel({
                       </Stack>
                     </TableCell>
                     <TableCell>
-                      <Stack direction="row" spacing={1} flexWrap="wrap">
-                        {group.runs.map((run) => {
-                          const statusLabel = statusMeta[run.status].label;
-                          const timestamp = run.updated_at ?? run.created_at;
-                          const shortTimestamp =
-                            formatTimestamp(timestamp) ?? "Unknown time";
-                          const longTimestamp =
+                      {(() => {
+                        const isCollapsible = group.runs.length > collapseThreshold;
+                        const isExpanded = expandedTasks[group.task_name] ?? false;
+                        const visibleRuns =
+                          isCollapsible && !isExpanded
+                            ? group.runs.slice(0, collapseThreshold)
+                            : group.runs;
+                        const hiddenCount = group.runs.length - visibleRuns.length;
+
+                        return (
+                          <Stack spacing={1} alignItems="flex-start">
+                            <Stack direction="row" spacing={1} flexWrap="wrap">
+                              {visibleRuns.map((run) => {
+                                  const statusLabel = statusMeta[run.status].label;
+                                  const timestamp = run.updated_at ?? run.created_at;
+                                  const shortTimestamp =
+                                    formatTimestamp(timestamp) ?? "Unknown time";
+                                  const longTimestamp =
                             formatTimestamp(timestamp, { long: true }) ??
                             "Unknown time";
                           const timingPrefix = timestampPrefix(run.status);
@@ -539,69 +566,113 @@ export default function TaskManagementPanel({
                           ].join(" • ");
                           const isSelected = taskId.trim() === run.task_id;
                           const canDelete = !disableActions && deletingId !== run.task_id;
-                          return (
-                            <Tooltip
-                              key={run.task_id}
-                              arrow
-                              title={
-                                <Stack spacing={0.5}>
+                                  return (
+                                    <Tooltip
+                                      key={run.task_id}
+                                      arrow
+                                      title={
+                                        <Stack spacing={0.5}>
+                                          <Typography
+                                            variant="caption"
+                                            component="span"
+                                            color="inherit"
+                                          >
+                                            Status: {statusLabel}
+                                          </Typography>
+                                          <Typography
+                                            variant="caption"
+                                            component="span"
+                                            color="inherit"
+                                          >
+                                            {timingPrefix}: {longTimestamp}
+                                          </Typography>
+                                          <Typography
+                                            variant="caption"
+                                            component="span"
+                                            color="inherit"
+                                          >
+                                            Task ID: {run.task_id}
+                                          </Typography>
+                                          <Typography
+                                            variant="caption"
+                                            component="span"
+                                            color="inherit"
+                                          >
+                                            Click to select or delete.
+                                          </Typography>
+                                        </Stack>
+                                      }
+                                    >
+                                      <Chip
+                                        label={label}
+                                        color={statusMeta[run.status].color}
+                                        size="small"
+                                        variant={
+                                          isSelected || run.status === "pending"
+                                            ? "outlined"
+                                            : "filled"
+                                        }
+                                        onClick={() => setTaskId(run.task_id)}
+                                        onDelete={
+                                          canDelete
+                                            ? () => deleteTask(run.task_id)
+                                            : undefined
+                                        }
+                                        deleteIcon={
+                                          <DeleteForeverIcon fontSize="small" />
+                                        }
+                                        sx={{
+                                          mr: 1,
+                                          mb: 1,
+                                          borderStyle: isSelected ? "solid" : undefined
+                                        }}
+                                      />
+                                    </Tooltip>
+                                  );
+                                })}
+                              {isCollapsible && hiddenCount > 0 && !isExpanded ? (
+                                <Chip
+                                  label={`+${hiddenCount} more`}
+                                  size="small"
+                                  color="default"
+                                  variant="outlined"
+                                  sx={{ mr: 1, mb: 1, pointerEvents: "none" }}
+                                />
+                              ) : null}
+                            </Stack>
+                            {isCollapsible ? (
+                              <Stack spacing={0.5}>
+                                {!isExpanded ? (
                                   <Typography
                                     variant="caption"
-                                    component="span"
-                                    color="inherit"
+                                    color="text.secondary"
                                   >
-                                    Status: {statusLabel}
+                                    Showing first {visibleRuns.length} of {group.runs.length}{" "}
+                                    runs.
                                   </Typography>
-                                  <Typography
-                                    variant="caption"
-                                    component="span"
-                                    color="inherit"
-                                  >
-                                    {timingPrefix}: {longTimestamp}
-                                  </Typography>
-                                  <Typography
-                                    variant="caption"
-                                    component="span"
-                                    color="inherit"
-                                  >
-                                    Task ID: {run.task_id}
-                                  </Typography>
-                                  <Typography
-                                    variant="caption"
-                                    component="span"
-                                    color="inherit"
-                                  >
-                                    Click to select or delete.
-                                  </Typography>
-                                </Stack>
-                              }
-                            >
-                              <Chip
-                                label={label}
-                                color={statusMeta[run.status].color}
-                                size="small"
-                                variant={
-                                  isSelected || run.status === "pending"
-                                    ? "outlined"
-                                    : "filled"
-                                }
-                                onClick={() => setTaskId(run.task_id)}
-                                onDelete={
-                                  canDelete
-                                    ? () => deleteTask(run.task_id)
-                                    : undefined
-                                }
-                                deleteIcon={<DeleteForeverIcon fontSize="small" />}
-                                sx={{
-                                  mr: 1,
-                                  mb: 1,
-                                  borderStyle: isSelected ? "solid" : undefined
-                                }}
-                              />
-                            </Tooltip>
-                          );
-                        })}
-                      </Stack>
+                                ) : null}
+                                <Button
+                                  size="small"
+                                  variant="text"
+                                  startIcon={
+                                    isExpanded ? (
+                                      <ExpandLessIcon fontSize="small" />
+                                    ) : (
+                                      <ExpandMoreIcon fontSize="small" />
+                                    )
+                                  }
+                                  onClick={() => toggleTaskRuns(group.task_name)}
+                                  sx={{ alignSelf: "flex-start" }}
+                                >
+                                  {isExpanded
+                                    ? "Show fewer runs"
+                                    : `Show all ${group.runs.length} runs`}
+                                </Button>
+                              </Stack>
+                            ) : null}
+                          </Stack>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell align="right">
                       <Stack
