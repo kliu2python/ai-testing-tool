@@ -23,6 +23,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import TaskIcon from "@mui/icons-material/Task";
 import InsightsIcon from "@mui/icons-material/Insights";
 import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
+import ReplayIcon from "@mui/icons-material/Replay";
 
 import { 
   apiRequest,
@@ -31,6 +32,7 @@ import {
 import type {
   AuthenticatedUser,
   NotificationState,
+  RunResponse,
   StepInfo,
   TaskCollectionResponse,
   TaskStatusResponse,
@@ -63,6 +65,7 @@ export default function TaskManagementPanel({
   const [steps, setSteps] = useState<StepInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [rerunningName, setRerunningName] = useState<string | null>(null);
 
   const assetBase = useMemo(() => baseUrl.replace(/\/$/, ""), [baseUrl]);
 
@@ -248,7 +251,38 @@ export default function TaskManagementPanel({
     }
   }
 
-  const disableActions = loading || Boolean(deletingId);
+  const disableActions = loading || Boolean(deletingId) || Boolean(rerunningName);
+
+  async function rerunTask(taskName: string) {
+    const authToken = requireToken();
+    if (!authToken) {
+      return;
+    }
+    setRerunningName(taskName);
+    try {
+      const result = await apiRequest<RunResponse>(
+        baseUrl,
+        "post",
+        `/tasks/${encodeURIComponent(taskName)}/rerun`,
+        undefined,
+        authToken
+      );
+      if (result.ok) {
+        const queued = result.data?.task_ids?.length ?? 0;
+        const message =
+          queued > 1
+            ? `Task rerun queued ${queued} times successfully`
+            : "Task rerun queued successfully";
+        onNotify({ message, severity: "success" });
+        await refreshTasks();
+      } else {
+        const message = result.error ?? `Request failed with ${result.status}`;
+        onNotify({ message, severity: "error" });
+      }
+    } finally {
+      setRerunningName(null);
+    }
+  }
 
   return (
     <Stack spacing={3}>
@@ -285,12 +319,13 @@ export default function TaskManagementPanel({
                   Task Name
                 </TableCell>
                 <TableCell>Queued Runs</TableCell>
+                <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {groupedTasks.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={2}>
+                  <TableCell colSpan={3}>
                     <Typography
                       variant="body2"
                       color="text.secondary"
@@ -355,6 +390,19 @@ export default function TaskManagementPanel({
                           );
                         })}
                       </Stack>
+                    </TableCell>
+                    <TableCell align="right">
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<ReplayIcon fontSize="small" />}
+                        onClick={() => rerunTask(group.task_name)}
+                        disabled={
+                          disableActions || rerunningName === group.task_name
+                        }
+                      >
+                        Rerun
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))

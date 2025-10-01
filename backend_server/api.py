@@ -20,7 +20,7 @@ import logging
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ValidationError
 from redis.asyncio import Redis
 
 from backend_server.task_queue import (
@@ -34,6 +34,7 @@ from backend_server.task_store import (
     delete_task_run,
     ensure_task_tables,
     list_task_runs_for_user,
+    load_latest_task_request,
     load_task_names,
     load_task_run,
     register_task_run,
@@ -547,8 +548,9 @@ async def run_automation(
     """Enqueue automation tasks to be executed by the background runner."""
 
     redis = _redis_client()
-    repeat = max(1, request.repeat)
-    base_payload = request.dict()
+    request_payload = request.dict()
+    repeat = max(1, request_payload.get("repeat", 1))
+    base_payload = dict(request_payload)
     base_payload.pop("repeat", None)
     base_payload["user_id"] = current_user.id
 
@@ -561,7 +563,11 @@ async def run_automation(
 
         try:
             register_task_run(
-                task_id, current_user.id, request.reports_folder, request.tasks
+                task_id,
+                current_user.id,
+                request.reports_folder,
+                request.tasks,
+                request_payload=request_payload,
             )
         except sqlite3.Error as exc:  # pragma: no cover - operational failure
             message = f"Failed to persist task metadata: {exc}"
@@ -805,6 +811,33 @@ async def get_task_result(
         raise HTTPException(status_code=202, detail="Task is still in progress")
     steps = _build_step_images(status.summary_path)
     return status.copy(update={"steps": steps})
+
+
+@app.post(
+    "/tasks/{task_name}/rerun",
+    response_model=RunResponse,
+    summary="Rerun a stored task configuration",
+)
+async def rerun_task_by_name(
+    task_name: str, current_user: User = Depends(get_current_user)
+) -> RunResponse:
+    """Requeue the most recent run for ``task_name`` using stored settings."""
+
+    owner_filter = None if current_user.is_admin else current_user.id
+    record = load_latest_task_request(task_name, owner_filter)
+    if record is None or not record.get("payload"):
+        raise HTTPException(status_code=404, detail="Task configuration not found")
+
+    payload = record["payload"]
+    try:
+        stored_request = RunRequest(**payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Stored task configuration is invalid",
+        ) from exc
+
+    return await run_automation(stored_request, current_user)
 
 
 @app.delete(
