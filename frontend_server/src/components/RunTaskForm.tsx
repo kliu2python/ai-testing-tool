@@ -13,6 +13,7 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 
 import { apiRequest, formatPayload } from "../api";
 import type {
+  LlmMode,
   NotificationState,
   RunResponse,
   RunTaskPayload
@@ -66,6 +67,7 @@ export default function RunTaskForm({
   const [response, setResponse] = useState("");
   const [repeatCount, setRepeatCount] = useState(1);
   const [promptCopied, setPromptCopied] = useState(false);
+  const [llmMode, setLlmMode] = useState<LlmMode>("auto");
 
   const promptValue =
     promptOption === "custom"
@@ -147,7 +149,8 @@ export default function RunTaskForm({
       platform,
       reports_folder: reportsFolder,
       debug,
-      repeat: repeatCount
+      repeat: repeatCount,
+      llm_mode: llmMode
     };
 
     setSubmitting(true);
@@ -247,6 +250,18 @@ export default function RunTaskForm({
         <MenuItem value="android">Android</MenuItem>
         <MenuItem value="ios">iOS</MenuItem>
         <MenuItem value="web">Web</MenuItem>
+      </TextField>
+      <TextField
+        select
+        label="LLM Mode"
+        value={llmMode}
+        onChange={(event) => setLlmMode(event.target.value as LlmMode)}
+        fullWidth
+        helperText="Choose whether to auto-detect, force text-only, or use the vision model."
+      >
+        <MenuItem value="auto">Auto (detect from task)</MenuItem>
+        <MenuItem value="text">Text only</MenuItem>
+        <MenuItem value="vision">Vision enabled</MenuItem>
       </TextField>
       <TextField
         label="Reports Folder"

@@ -328,6 +328,14 @@ class Platform(str, Enum):
     web = "web"
 
 
+class LlmMode(str, Enum):
+    """Inference modes for the action generation model."""
+
+    auto = "auto"
+    text = "text"
+    vision = "vision"
+
+
 class RunRequest(BaseModel):
     """Request payload for running automation tasks."""
 
@@ -356,6 +364,10 @@ class RunRequest(BaseModel):
         ge=1,
         le=500,
         description="Number of times to enqueue the same task run.",
+    )
+    llm_mode: LlmMode = Field(
+        LlmMode.auto,
+        description="Preferred model mode: auto-select, text-only, or vision-enabled.",
     )
 
 

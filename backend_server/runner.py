@@ -88,36 +88,136 @@ def create_folder(folder_path):
     return folder_path
 
 
-def image_to_base64(image_path):
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode("utf-8")
+def image_to_base64(image_path: str) -> Optional[str]:
+    try:
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode("utf-8")
+    except FileNotFoundError:
+        logger.warning("Screenshot '%s' is not available for encoding", image_path)
+    except IOError as exc:
+        logger.warning("Unable to read screenshot '%s': %s", image_path, exc)
+    return None
 
 
 # -----------------------------
 # LLM: next action generation
 # -----------------------------
-def generate_next_action(_prompt, _task, _history_actions, page_source_file):
-    screenshot_base64 = image_to_base64(page_screenshot)
-    _page_src = read_file_content(page_source_file)
-    _history_actions_str = "\\n".join(_history_actions)
-    _messages = []
-    _messages.append({"role": "system", "content": _prompt})
-    _messages.append(
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": f"# Task \\n {_task}"},
-                {"type": "text", "text": f"# History of Actions \\n {_history_actions_str}"},
-                {"type": "text", "text": f"# Source of Page \\n ```yaml\\n {_page_src} \\n```"},
-            ],
-        }
-    )
+_LLM_MODES = {"auto", "text", "vision"}
+_VISION_KEYWORDS = {
+    "image",
+    "visual",
+    "screenshot",
+    "picture",
+    "photo",
+    "icon",
+    "diagram",
+    "graph",
+    "chart",
+    "camera",
+    "ocr",
+    "scan",
+}
 
-    open_ai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"),
-                     base_url=os.getenv("OPENAI_BASE_URL"))
-    chat_response = open_ai.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL"), messages=_messages
-    )
+
+def _normalise_llm_mode(mode: Optional[str]) -> str:
+    if not mode:
+        return "auto"
+    mode_lower = mode.lower()
+    if mode_lower not in _LLM_MODES:
+        logger.debug("Unknown LLM mode '%s', defaulting to 'auto'", mode)
+        return "auto"
+    return mode_lower
+
+
+def _task_needs_vision(task: Dict[str, Any]) -> bool:
+    text_fragments: List[str] = []
+    for key in ("details", "name"):
+        value = task.get(key)
+        if isinstance(value, str):
+            text_fragments.append(value)
+
+    steps = task.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if isinstance(step, dict):
+                for value in step.values():
+                    if isinstance(value, str):
+                        text_fragments.append(value)
+
+    combined = " ".join(text_fragments).lower()
+    return any(keyword in combined for keyword in _VISION_KEYWORDS)
+
+
+def _resolve_task_llm_mode(preference: Optional[str], task: Dict[str, Any]) -> str:
+    normalised = _normalise_llm_mode(preference)
+    if normalised == "auto":
+        selected = "vision" if _task_needs_vision(task) else "text"
+        logger.debug(
+            "Auto-select LLM mode '%s' for task '%s'", selected, task.get("name")
+        )
+        return selected
+    return normalised
+
+
+def generate_next_action(
+    _prompt: str,
+    _task: str,
+    _history_actions: List[str],
+    page_source_file: str,
+    screenshot_path: Optional[str],
+    llm_mode: str,
+) -> str:
+    resolved_mode = _normalise_llm_mode(llm_mode)
+    _page_src = read_file_content(page_source_file) or ""
+    _history_actions_str = "\n".join(_history_actions)
+
+    user_content: List[Dict[str, Any]] = [
+        {"type": "text", "text": f"# Task \n {_task}"},
+        {"type": "text", "text": f"# History of Actions \n {_history_actions_str}"},
+        {"type": "text", "text": f"# Source of Page \n ```yaml\n {_page_src} \n```"},
+    ]
+
+    if resolved_mode == "vision" and screenshot_path:
+        screenshot_base64 = image_to_base64(screenshot_path)
+        if screenshot_base64:
+            user_content.append(
+                {
+                    "type": "input_image",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{screenshot_base64}",
+                    },
+                }
+            )
+        else:
+            logger.debug(
+                "Vision mode requested but screenshot '%s' could not be encoded",
+                screenshot_path,
+            )
+            resolved_mode = "text"
+
+    system_prompt = _prompt
+    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY environment variable is required")
+
+    base_url = os.getenv("OPENAI_BASE_URL")
+    model = os.getenv("OPENAI_MODEL")
+
+    if resolved_mode == "vision":
+        base_url = os.getenv("OPENAI_VISION_BASE_URL") or base_url
+        model = os.getenv("OPENAI_VISION_MODEL") or model
+
+    if not model:
+        raise RuntimeError("No OpenAI model configured for next action generation")
+
+    client_kwargs = {"api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    open_ai = OpenAI(**client_kwargs)
+    chat_response = open_ai.chat.completions.create(model=model, messages=messages)
     content = chat_response.choices[0].message.content
     return content
 
@@ -1003,6 +1103,7 @@ def _run_tasks(
     reports_folder: str,
     debug: bool = False,
     task_id: Optional[str] = None,
+    llm_mode: Optional[str] = None,
 ) -> RunResult:
     """Execute tasks using the configured automation server."""
 
@@ -1044,6 +1145,10 @@ def _run_tasks(
             page_screenshot_for_next_step = take_screenshot(driver, task_folder, "step_0")
             history_actions: List[str] = []
             step = 0
+            effective_llm_mode = _resolve_task_llm_mode(llm_mode, task)
+            logger.debug(
+                "Using '%s' mode for task '%s'", effective_llm_mode, task.get("name")
+            )
             task_result = {
                 "name": name,
                 "scope": scope,
@@ -1091,7 +1196,8 @@ def _run_tasks(
                             details,
                             history_actions,
                             page_source_for_next_step,
-                            page_screenshot_for_next_step
+                            page_screenshot_for_next_step,
+                            effective_llm_mode,
                         )
 
                     logger.debug("Step %s: %s", step, next_action)
@@ -1132,6 +1238,7 @@ def run_tasks(
     reports_folder: str,
     debug: bool = False,
     task_id: Optional[str] = None,
+    llm_mode: Optional[str] = None,
 ) -> RunResult:
     """Run tasks synchronously (backwards compatible helper)."""
 
@@ -1143,6 +1250,7 @@ def run_tasks(
         reports_folder,
         debug,
         task_id=task_id,
+        llm_mode=llm_mode,
     )
 
 
@@ -1154,6 +1262,7 @@ async def run_tasks_async(
     reports_folder: str,
     debug: bool = False,
     task_id: Optional[str] = None,
+    llm_mode: Optional[str] = None,
 ) -> RunResult:
     """Run tasks in a shared background executor for concurrency."""
 
@@ -1168,6 +1277,7 @@ async def run_tasks_async(
         reports_folder,
         debug,
         task_id,
+        llm_mode,
     )
     return await loop.run_in_executor(executor, func)
 
@@ -1191,6 +1301,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--reports", default="./reports", help="Folder to store the reports, default is ./reports"
     )
+    parser.add_argument(
+        "--llm-mode",
+        choices=sorted(_LLM_MODES),
+        default="auto",
+        help="Preferred LLM mode: auto, text, or vision",
+    )
 
     args = parser.parse_args()
 
@@ -1200,6 +1316,7 @@ if __name__ == "__main__":
     platform = args.platform
     reports_folder = args.reports
     appium_server = args.appium
+    llm_mode = args.llm_mode
 
     prompt = read_file_content(prompt_file)
     tasks = json.loads(read_file_content(task_file))
@@ -1227,8 +1344,17 @@ if __name__ == "__main__":
         activate_sequence_for_task(driver, platform, apps)
 
         page_source_for_next_step = take_page_source(driver, task_folder, "step_0")
+        page_screenshot_for_next_step = take_screenshot(
+            driver, task_folder, "step_0"
+        )
         history_actions: List[str] = []
         step = 0
+        effective_llm_mode = _resolve_task_llm_mode(llm_mode, task)
+        logger.debug(
+            "CLI run using '%s' mode for task '%s'",
+            effective_llm_mode,
+            task.get("name"),
+        )
 
         while page_source_for_next_step is not None:
             step += 1
@@ -1248,13 +1374,20 @@ if __name__ == "__main__":
                     prompt,
                     details,
                     history_actions,
-                    page_source_for_next_step
+                    page_source_for_next_step,
+                    page_screenshot_for_next_step,
+                    effective_llm_mode,
                 )
 
             logger.debug("Step %s: %s", step, next_action)
 
-            (page_source_for_next_step, _,
-                next_action_with_result) = process_next_action(next_action, driver, task_folder, f"step_{step}")
+            (
+                page_source_for_next_step,
+                page_screenshot_for_next_step,
+                next_action_with_result,
+            ) = process_next_action(
+                next_action, driver, task_folder, f"step_{step}"
+            )
 
             write_to_file(f"{task_folder}/step_{step}.json", next_action_with_result)
             history_actions.append(next_action_with_result)
