@@ -97,6 +97,7 @@ def image_to_base64(image_path):
 # LLM: next action generation
 # -----------------------------
 def generate_next_action(_prompt, _task, _history_actions, page_source_file):
+    screenshot_base64 = image_to_base64(page_screenshot)
     _page_src = read_file_content(page_source_file)
     _history_actions_str = "\\n".join(_history_actions)
     _messages = []
@@ -692,6 +693,12 @@ def take_page_source(driver, folder: str, name: str):
         return xml_str_to_yaml(yaml_path, src, platform=platform)
 
 
+def take_screenshot(driver: webdriver.Remote, folder, name):
+    driver.save_screenshot(f"{folder}/{name}.png")
+    format_image(f"{folder}/{name}.png", f"{folder}/{name}.jpg")
+    return f"{folder}/{name}.jpg"
+
+
 # -----------------------------
 # Actions processing
 # -----------------------------
@@ -800,6 +807,7 @@ def process_next_action(action, driver: webdriver.Remote, folder, step_name):
     platform = _get_platform(driver)
     if data["action"] in ("error", "finish"):
         take_page_source(driver, folder, step_name)
+        take_screenshot(driver, folder, step_name)
         data["result"] = "success"
         return (None, None, json.dumps(data))
 
@@ -957,7 +965,7 @@ def process_next_action(action, driver: webdriver.Remote, folder, step_name):
             data["result"] = "unknown action"
             return None, None, json.dumps(data)
 
-        return take_page_source(driver, folder, step_name), None, json.dumps(data)
+        return take_page_source(driver, folder, step_name), take_screenshot(driver, folder, step_name), json.dumps(data)
     except Exception as e:
         data["result"] = f"exception: {e}"
         return None, None, json.dumps(data)
@@ -1033,6 +1041,7 @@ def _run_tasks(
             write_to_file(f"{task_folder}/task.json", json.dumps(task))
             sleep(1)
             page_source_for_next_step = take_page_source(driver, task_folder, "step0")
+            page_screenshot_for_next_step = take_screenshot(driver, task_folder, "step_0")
             history_actions: List[str] = []
             step = 0
             task_result = {
@@ -1081,14 +1090,15 @@ def _run_tasks(
                             prompt,
                             details,
                             history_actions,
-                            page_source_for_next_step
+                            page_source_for_next_step,
+                            page_screenshot_for_next_step
                         )
 
                     logger.debug("Step %s: %s", step, next_action)
 
                     (
                         page_source_for_next_step,
-                        _,
+                        page_screenshot_for_next_step,
                         next_action_with_result,
                     ) = process_next_action(
                         next_action, driver, task_folder, f"step{step}"
