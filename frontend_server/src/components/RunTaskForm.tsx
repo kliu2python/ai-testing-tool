@@ -16,7 +16,8 @@ import type {
   LlmMode,
   NotificationState,
   RunResponse,
-  RunTaskPayload
+  RunTaskPayload,
+  EmulatorProvisionResponse
 } from "../types";
 import defaultPrompt from "../prompts/default.md?raw";
 import JsonOutput from "./JsonOutput";
@@ -68,6 +69,9 @@ export default function RunTaskForm({
   const [repeatCount, setRepeatCount] = useState(1);
   const [promptCopied, setPromptCopied] = useState(false);
   const [llmMode, setLlmMode] = useState<LlmMode>("auto");
+  const [androidVersion, setAndroidVersion] = useState("");
+  const [apkFileName, setApkFileName] = useState("");
+  const [requestingEmulator, setRequestingEmulator] = useState(false);
 
   const promptValue =
     promptOption === "custom"
@@ -176,6 +180,61 @@ export default function RunTaskForm({
     setResponse(formatPayload(result.data));
   }
 
+  async function handleRequestEmulator() {
+    if (!token) {
+      onNotify({
+        message: "Log in to request emulator resources",
+        severity: "warning"
+      });
+      return;
+    }
+
+    if (!androidVersion.trim()) {
+      onNotify({
+        message: "Provide the Android version for the emulator",
+        severity: "warning"
+      });
+      return;
+    }
+
+    if (!apkFileName.trim()) {
+      onNotify({
+        message: "Provide the FortiToken Mobile APK file name",
+        severity: "warning"
+      });
+      return;
+    }
+
+    const payload = {
+      android_version: androidVersion.trim(),
+      apk_file_name: apkFileName.trim()
+    };
+
+    setRequestingEmulator(true);
+    const result = await apiRequest<EmulatorProvisionResponse>(
+      baseUrl,
+      "post",
+      "/emulator/request",
+      payload,
+      token
+    );
+    setRequestingEmulator(false);
+
+    setResponse(formatPayload(result.data));
+
+    if (result.ok && result.data) {
+      setServer(result.data.server);
+      onNotify({
+        message: `Emulator ready (ADB ${result.data.adb_port}, VNC ${result.data.vnc_port})`,
+        severity: "success"
+      });
+      return;
+    }
+
+    const message = result.error ?? `Request failed with ${result.status}`;
+    onNotify({ message, severity: "error" });
+  }
+
   return (
     <Stack spacing={2}>
       <Stack direction="row" spacing={1} alignItems="center">
@@ -234,6 +293,37 @@ export default function RunTaskForm({
         multiline
         minRows={8}
       />
+      <Stack
+        direction={{ xs: "column", md: "row" }}
+        spacing={2}
+        alignItems={{ md: "flex-end" }}
+      >
+        <TextField
+          label="Android Version"
+          value={androidVersion}
+          onChange={(event) => setAndroidVersion(event.target.value)}
+          fullWidth
+          helperText="Dhub emulator version (for example: 14)."
+        />
+        <TextField
+          label="FTM APK File Name"
+          value={apkFileName}
+          onChange={(event) => setApkFileName(event.target.value)}
+          fullWidth
+          helperText="Located under /home/fortinet/apk (add .apk if missing)."
+        />
+        <Button
+          variant="outlined"
+          onClick={handleRequestEmulator}
+          disabled={requestingEmulator}
+          sx={{
+            width: { xs: "100%", md: "auto" },
+            whiteSpace: "nowrap"
+          }}
+        >
+          {requestingEmulator ? "Requesting Emulator..." : "Request Emulator"}
+        </Button>
+      </Stack>
       <TextField
         label="Automation Server"
         value={server}
