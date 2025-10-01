@@ -12,7 +12,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL:-INFO}
     volumes:
-      - backend-data:/data
+      - ~/app_db:/data
     depends_on:
       - redis
 
@@ -25,7 +25,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL:-INFO}
     volumes:
-      - backend-data:/data
+      - ~/app_db:/data
     depends_on:
       - redis
 
@@ -34,7 +34,7 @@ services:
       context: ./frontend_server
     image: ai-testing-tool-frontend
     ports:
-      - "5173:80"
+      - "443:443"
     depends_on:
       - api
 

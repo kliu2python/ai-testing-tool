@@ -1033,9 +1033,6 @@ def _run_tasks(
             write_to_file(f"{task_folder}/task.json", json.dumps(task))
             sleep(1)
             page_source_for_next_step = take_page_source(driver, task_folder, "step0")
-            page_screenshot_for_next_step = take_screenshot(
-                driver, task_folder, "step0"
-            )
             history_actions: List[str] = []
             step = 0
             task_result = {
@@ -1052,7 +1049,7 @@ def _run_tasks(
                     next_action = json.dumps(step_action)
                     (
                         page_source_for_next_step,
-                        page_screenshot_for_next_step,
+                        _,
                         next_action_with_result,
                     ) = process_next_action(
                         next_action, driver, task_folder, f"step{step}"
@@ -1084,15 +1081,14 @@ def _run_tasks(
                             prompt,
                             details,
                             history_actions,
-                            page_source_for_next_step,
-                            page_screenshot_for_next_step,
+                            page_source_for_next_step
                         )
 
                     logger.debug("Step %s: %s", step, next_action)
 
                     (
                         page_source_for_next_step,
-                        page_screenshot_for_next_step,
+                        _,
                         next_action_with_result,
                     ) = process_next_action(
                         next_action, driver, task_folder, f"step{step}"
@@ -1247,8 +1243,7 @@ if __name__ == "__main__":
 
             logger.debug("Step %s: %s", step, next_action)
 
-            (page_source_for_next_step,
-                _page_screenshot_for_next_step,
+            (page_source_for_next_step, _,
                 next_action_with_result) = process_next_action(next_action, driver, task_folder, f"step_{step}")
 
             write_to_file(f"{task_folder}/step_{step}.json", next_action_with_result)

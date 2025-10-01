@@ -23,8 +23,12 @@ import JsonOutput from "./JsonOutput";
 const SAMPLE_TASKS = JSON.stringify(
   [
     {
-      description: "Open the application and perform checks.",
-      actions: ["launch", "validate"]
+      name: "activate fortitoken using activation code",
+      details: "When you open app FortiToken Mobile, you should use activate code 'GEAD2IZEHWDN2SLTTWIMMFX6LW4GXTH35WJDWNUVZPDZTJZB6DAJISUSWPA7ORNB' to activate a token by click Add button, name it ai token. You should see error message said: already activated",
+      scope: "functional",
+      skip: false,
+      steps: [],
+      apps: ["FortiToken-Mobile"]
     }
   ],
   null,
