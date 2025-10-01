@@ -182,10 +182,8 @@ def generate_next_action(
         if screenshot_base64:
             user_content.append(
                 {
-                    "type": "input_image",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{screenshot_base64}",
-                    },
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{screenshot_base64}"},
                 }
             )
         else:
@@ -206,6 +204,7 @@ def generate_next_action(
     model = os.getenv("OPENAI_MODEL")
 
     if resolved_mode == "vision":
+        api_key = os.getenv("OPENAI_VISION_API_KEY")
         base_url = os.getenv("OPENAI_VISION_BASE_URL") or base_url
         model = os.getenv("OPENAI_VISION_MODEL") or model
 
