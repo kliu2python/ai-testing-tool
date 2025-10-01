@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, SyntheticEvent } from "react";
 import {
   Alert,
@@ -9,22 +9,27 @@ import {
   Container,
   CssBaseline,
   Grid,
+  IconButton,
   Snackbar,
   SnackbarCloseReason,
   Stack,
   Tab,
   Tabs,
+  Tooltip,
   Toolbar,
   Typography
 } from "@mui/material";
 import { ThemeProvider } from "@mui/material/styles";
+import type { PaletteMode } from "@mui/material";
+import Brightness4Icon from "@mui/icons-material/Brightness4";
+import Brightness7Icon from "@mui/icons-material/Brightness7";
 
 import { API_BASE_DEFAULT } from "./api";
 import AuthPanel from "./components/AuthPanel";
 import ApiConfigPanel from "./components/ApiConfigPanel";
 import RunTaskForm from "./components/RunTaskForm";
 import TaskManagementPanel from "./components/TaskManagementPanel";
-import theme from "./theme";
+import { createAppTheme } from "./theme";
 import type {
   AuthenticatedUser,
   NotificationState
@@ -57,8 +62,21 @@ function tabProps(index: number) {
 }
 
 const AUTH_STORAGE_KEY = "backend-server-auth";
+const COLOR_MODE_STORAGE_KEY = "frontend-color-mode";
 
 export default function App() {
+  const [mode, setMode] = useState<PaletteMode>(() => {
+    if (typeof window === "undefined") {
+      return "light";
+    }
+    const stored = localStorage.getItem(COLOR_MODE_STORAGE_KEY);
+    if (stored === "light" || stored === "dark") {
+      return stored;
+    }
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  });
   const [baseUrl, setBaseUrl] = useState<string>(API_BASE_DEFAULT);
   const [notification, setNotification] = useState<NotificationState | null>(
     null
@@ -69,11 +87,19 @@ export default function App() {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const authPanelRef = useRef<HTMLDivElement | null>(null);
+  const theme = useMemo(() => createAppTheme(mode), [mode]);
 
   const showNotification = useCallback((update: NotificationState) => {
     setNotification(update);
     setSnackbarOpen(true);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    localStorage.setItem(COLOR_MODE_STORAGE_KEY, mode);
+  }, [mode]);
 
   useEffect(() => {
     const stored = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -93,6 +119,10 @@ export default function App() {
       console.warn("Failed to parse stored authentication", error);
       localStorage.removeItem(AUTH_STORAGE_KEY);
     }
+  }, []);
+
+  const toggleColorMode = useCallback(() => {
+    setMode((current) => (current === "light" ? "dark" : "light"));
   }, []);
 
   const handleAuthNavigation = useCallback((mode: "login" | "signup") => {
@@ -147,6 +177,15 @@ export default function App() {
               </Typography>
             </Box>
             <Box sx={{ flexGrow: 1 }} />
+            <Tooltip
+              title={
+                mode === "dark" ? "Switch to light mode" : "Switch to dark mode"
+              }
+            >
+              <IconButton color="inherit" onClick={toggleColorMode}>
+                {mode === "dark" ? <Brightness7Icon /> : <Brightness4Icon />}
+              </IconButton>
+            </Tooltip>
             <Chip
               label={
                 user
