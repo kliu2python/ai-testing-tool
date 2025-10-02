@@ -340,7 +340,19 @@ export default function TaskManagementPanel({
       const message = result.error ?? `Request failed with ${result.status}`;
       onNotify({ message, severity: "error" });
     }
-    setResultContent(formatPayload(result.data));
+    const responseData = result.data;
+    const summaryEntries =
+      responseData && Array.isArray(responseData.summary)
+        ? (responseData.summary as unknown[])
+        : [];
+    const lastSummary =
+      summaryEntries.length > 0
+        ? summaryEntries[summaryEntries.length - 1]
+        : null;
+    const content = lastSummary
+      ? formatPayload(lastSummary)
+      : formatPayload(responseData);
+    setResultContent(content);
     const responseSteps =
       result.ok && Array.isArray(result.data?.steps)
         ? (result.data?.steps as StepInfo[])
