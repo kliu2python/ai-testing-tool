@@ -159,6 +159,63 @@ def _resolve_task_llm_mode(preference: Optional[str], task: Dict[str, Any]) -> s
     return normalised
 
 
+def _describe_screenshot_with_vision_model(screenshot_path: str) -> Optional[str]:
+    """Return a textual description of ``screenshot_path`` using the vision model."""
+
+    screenshot_base64 = image_to_base64(screenshot_path)
+    if not screenshot_base64:
+        return None
+
+    api_key = os.getenv("OPENAI_VISION_API_KEY")
+    model = os.getenv("OPENAI_VISION_MODEL")
+    if not api_key or not model:
+        logger.warning(
+            "Vision mode requested but OPENAI_VISION_API_KEY or OPENAI_VISION_MODEL is not set; "
+            "skipping screenshot description",
+        )
+        return None
+
+    base_url = os.getenv("OPENAI_VISION_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+
+    client_kwargs = {"api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    system_prompt = (
+        "You are an assistant that describes application screenshots for automated testing. "
+        "Identify interactive controls, text labels, alerts, and any relevant UI layout details."
+    )
+    user_message = [
+        {
+            "type": "text",
+            "text": (
+                "Provide a concise yet thorough description of the visible screen. "
+                "Highlight key UI elements, their labels, and any state that might influence the next action."
+            ),
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{screenshot_base64}"},
+        },
+    ]
+
+    try:
+        client = OpenAI(**client_kwargs)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+        )
+    except Exception as exc:
+        logger.warning("Vision model failed to describe screenshot '%s': %s", screenshot_path, exc)
+        return None
+
+    description = response.choices[0].message.content or ""
+    return description.strip() or None
+
+
 def generate_next_action(
     _prompt: str,
     _task: str,
@@ -166,10 +223,14 @@ def generate_next_action(
     page_source_file: str,
     screenshot_path: Optional[str],
     llm_mode: str,
+    screen_description: Optional[str] = None,
 ) -> str:
     resolved_mode = _normalise_llm_mode(llm_mode)
     _page_src = read_file_content(page_source_file) or ""
     _history_actions_str = "\n".join(_history_actions)
+
+    if resolved_mode == "vision" and not screen_description and screenshot_path:
+        screen_description = _describe_screenshot_with_vision_model(screenshot_path)
 
     user_content: List[Dict[str, Any]] = [
         {"type": "text", "text": f"# Task \n {_task}"},
@@ -177,24 +238,21 @@ def generate_next_action(
         {"type": "text", "text": f"# Source of Page \n ```yaml\n {_page_src} \n```"},
     ]
 
-    if resolved_mode == "vision" and screenshot_path:
-        screenshot_base64 = image_to_base64(screenshot_path)
-        if screenshot_base64:
-            user_content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{screenshot_base64}"},
-                }
-            )
-        else:
-            logger.debug(
-                "Vision mode requested but screenshot '%s' could not be encoded",
-                screenshot_path,
-            )
-            resolved_mode = "text"
+    if screen_description:
+        user_content.append(
+            {"type": "text", "text": f"# Screen Description \n {screen_description}"}
+        )
+    elif resolved_mode == "vision":
+        logger.debug(
+            "Vision mode requested but no screenshot description was generated for '%s'",
+            screenshot_path,
+        )
 
     system_prompt = _prompt
-    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}]
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
 
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -202,11 +260,6 @@ def generate_next_action(
 
     base_url = os.getenv("OPENAI_BASE_URL")
     model = os.getenv("OPENAI_MODEL")
-
-    if resolved_mode == "vision":
-        api_key = os.getenv("OPENAI_VISION_API_KEY")
-        base_url = os.getenv("OPENAI_VISION_BASE_URL") or base_url
-        model = os.getenv("OPENAI_VISION_MODEL") or model
 
     if not model:
         raise RuntimeError("No OpenAI model configured for next action generation")
@@ -1234,11 +1287,21 @@ def _run_tasks(
                     step += 1
                     page_source = read_file_content(page_source_for_next_step) or ""
                     history_actions_str = "\n".join(history_actions)
+                    screen_description = None
+                    if (
+                        effective_llm_mode == "vision"
+                        and page_screenshot_for_next_step
+                    ):
+                        screen_description = _describe_screenshot_with_vision_model(
+                            page_screenshot_for_next_step
+                        )
                     prompts = [
                         f"# Task \n {details}",
                         f"# History of Actions \n {history_actions_str}",
                         f"# Source of Page \n ```yaml\n {page_source} \n```",
                     ]
+                    if screen_description:
+                        prompts.append(f"# Screen Description \n {screen_description}")
                     write_to_file(
                         f"{task_folder}/step{step}_prompt.md",
                         "\n".join(prompts),
@@ -1254,6 +1317,7 @@ def _run_tasks(
                             page_source_for_next_step,
                             page_screenshot_for_next_step,
                             effective_llm_mode,
+                            screen_description=screen_description,
                         )
 
                     logger.debug("Step %s: %s", step, next_action)
@@ -1416,11 +1480,18 @@ if __name__ == "__main__":
             step += 1
             page_source = read_file_content(page_source_for_next_step)
             history_actions_str = "\\n".join(history_actions)
+            screen_description = None
+            if effective_llm_mode == "vision" and page_screenshot_for_next_step:
+                screen_description = _describe_screenshot_with_vision_model(
+                    page_screenshot_for_next_step
+                )
             prompts = [
                 f"# Task \\n {details}",
                 f"# History of Actions \\n {history_actions_str}",
                 f"# Source of Page \\n ```yaml\\n {page_source} \\n```",
             ]
+            if screen_description:
+                prompts.append(f"# Screen Description \\n {screen_description}")
             write_to_file(f"{task_folder}/step_{step}_prompt.md", "\\n".join(prompts))
 
             if debug:
@@ -1433,6 +1504,7 @@ if __name__ == "__main__":
                     page_source_for_next_step,
                     page_screenshot_for_next_step,
                     effective_llm_mode,
+                    screen_description=screen_description,
                 )
 
             logger.debug("Step %s: %s", step, next_action)
