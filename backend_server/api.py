@@ -23,12 +23,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 from redis.asyncio import Redis
 
-from appium import webdriver
-from appium.options.android import UiAutomator2Options
-from appium.webdriver.client_config import AppiumClientConfig
-
-from libraries.taas.dhub import Dhub
-
 from backend_server.task_queue import (
     create_async_redis_client,
     dump_status,
@@ -385,44 +379,6 @@ class RunResponse(BaseModel):
     task_ids: List[str]
 
 
-class EmulatorRequest(BaseModel):
-    """Payload for requesting a new Android emulator."""
-
-    android_version: str = Field(..., min_length=1, max_length=16)
-    apk_file_name: str = Field(..., min_length=1, max_length=255)
-
-    @classmethod
-    def _normalise_filename(cls, value: str) -> str:
-        trimmed = value.strip()
-        if not trimmed:
-            raise ValueError("File name must not be empty")
-        if "/" in trimmed or ".." in trimmed:
-            raise ValueError("File name must not contain path separators")
-        if not trimmed.endswith(".apk"):
-            trimmed = f"{trimmed}.apk"
-        return trimmed
-
-    @property
-    def resolved_apk_name(self) -> str:
-        return self._normalise_filename(self.apk_file_name)
-
-    @property
-    def resolved_android_version(self) -> str:
-        trimmed = self.android_version.strip()
-        if not trimmed:
-            raise ValueError("Android version must not be empty")
-        return trimmed
-
-
-class EmulatorResponse(BaseModel):
-    """Connection details for a provisioned emulator."""
-
-    server: str
-    adb_port: int
-    vnc_port: int
-    pod_name: str
-
-
 class TaskStatus(str, Enum):
     """Possible lifecycle states for a queued task."""
 
@@ -591,109 +547,6 @@ def logout(authorization: str = Header(...)) -> None:
 
     token = _parse_bearer_token(authorization)
     _delete_token(token)
-
-
-@app.post(
-    "/emulator/request",
-    response_model=EmulatorResponse,
-    summary="Provision a dedicated Android emulator",
-)
-def request_emulator(
-    payload: EmulatorRequest, current_user: User = Depends(get_current_user)
-) -> EmulatorResponse:
-    """Allocate a Dhub emulator, install the requested APK, and return access details."""
-
-    try:
-        android_version = payload.resolved_android_version
-        apk_filename = payload.resolved_apk_name
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    dhub_client = Dhub(android_version)
-
-    while True:
-        created = dhub_client.create_emulator(creator="ai-test")
-        if not created:
-            logger.error("launch emulator pod failed")
-            raise HTTPException(status_code=500, detail="launch emulator pod failed")
-        if dhub_client.check_emulator():
-            logger.info("launch the emulator and available now.")
-            break
-
-    dhub_client.check_device_status()
-
-    if dhub_client.adb_port is None or dhub_client.vnc_port is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Emulator allocation did not return connection ports",
-        )
-    if dhub_client.pod_name is None:
-        raise HTTPException(
-            status_code=500, detail="Emulator allocation did not return pod name"
-        )
-
-    try:
-        adb_port = int(dhub_client.adb_port)
-        vnc_port = int(dhub_client.vnc_port)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=500, detail="Invalid port information returned by Dhub"
-        ) from exc
-
-    server_url = f"http://10.160.24.88:{adb_port}"
-
-    app_path = Path("/home/fortinet/apk") / apk_filename
-    if not app_path.exists():
-        raise HTTPException(
-            status_code=404, detail=f"APK file '{apk_filename}' was not found"
-        )
-
-    capabilities = {
-        "platformName": "Android",
-        "automationName": "uiautomator2",
-        "deviceName": "google_api",
-        "language": "en",
-        "locale": "US",
-        "appium:newCommandTimeout": 0,
-        "appium:uiautomator2ServerLaunchTimeout": 0,
-        "appium:app": str(app_path),
-        "appium:noReset": True,
-    }
-
-    options = UiAutomator2Options().load_capabilities(capabilities)
-    client_config = AppiumClientConfig(server_url)
-
-    driver = None
-    try:
-        driver = webdriver.Remote(
-            server_url,
-            options=options,
-            client_config=client_config,
-        )
-    except Exception as exc:  # pragma: no cover - external service interaction
-        logger.error(
-            "Failed to install app on emulator %s: %s",
-            dhub_client.pod_name,
-            exc,
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to install app: {exc}")
-    finally:
-        if driver is not None:
-            try:
-                driver.quit()
-            except Exception as exc:  # pragma: no cover - best effort cleanup
-                logger.warning(
-                    "Unable to close Appium session for emulator %s: %s",
-                    dhub_client.pod_name,
-                    exc,
-                )
-
-    return EmulatorResponse(
-        server=server_url,
-        adb_port=adb_port,
-        vnc_port=vnc_port,
-        pod_name=dhub_client.pod_name,
-    )
 
 
 @app.get(

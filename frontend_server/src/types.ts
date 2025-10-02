@@ -71,10 +71,3 @@ export interface RunResponse {
   task_id: string;
   task_ids: string[];
 }
-
-export interface EmulatorProvisionResponse {
-  server: string;
-  adb_port: number;
-  vnc_port: number;
-  pod_name: string;
-}
