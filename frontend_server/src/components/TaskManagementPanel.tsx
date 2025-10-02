@@ -488,26 +488,23 @@ export default function TaskManagementPanel({
   return (
     <Stack spacing={3}>
       <Stack direction="row" spacing={1} alignItems="center">
-        <TaskIcon color="primary" />
-        <Typography variant="h5" component="h2">
-          Task Management
-        </Typography>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexGrow: 1 }}>
+          <TaskIcon color="primary" />
+          <Typography variant="h5" component="h2">
+            Task Management
+          </Typography>
+        </Stack>
+        <Button
+          startIcon={<RefreshIcon />}
+          variant="outlined"
+          onClick={() => {
+            void refreshTasks();
+          }}
+          disabled={disableActions}
+        >
+          Refresh Tasks
+        </Button>
       </Stack>
-      <Typography variant="body2" color="text.secondary">
-        Viewing tasks as {user ? `${user.email} (${user.role})` : "guest"}. Only
-        your own tasks are visible unless you are an administrator.
-      </Typography>
-      <Button
-        startIcon={<RefreshIcon />}
-        variant="outlined"
-        onClick={() => {
-          void refreshTasks();
-        }}
-        disabled={disableActions}
-        sx={{ alignSelf: "flex-start" }}
-      >
-        Refresh Tasks
-      </Button>
       <Stack spacing={1.5}>
         <Typography variant="h6">Queued Tasks</Typography>
         <Typography variant="body2" color="text.secondary">
