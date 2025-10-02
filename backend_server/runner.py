@@ -36,7 +36,7 @@ import xml.etree.ElementTree as ET
 import yaml
 from dotenv import load_dotenv
 
-from libraries.taas.dhub import Dhub
+from backend_server.libraries.taas.dhub import Dhub
 from backend_server.logging_config import configure_logging
 
 load_dotenv()
@@ -902,7 +902,8 @@ def activate_sequence_for_task(driver, platform: str, apps: Optional[List[str]])
 
 
 def process_next_action(action, driver: webdriver.Remote, folder, step_name):
-    data = json.loads(action)
+    logger.info(f"!!Action is {action}")
+    data = safe_json_loads(action)
     platform = _get_platform(driver)
     if data["action"] in ("error", "finish"):
         take_page_source(driver, folder, step_name)
@@ -1073,6 +1074,62 @@ def process_next_action(action, driver: webdriver.Remote, folder, step_name):
 # -----------------------------
 # Misc helpers
 # -----------------------------
+def safe_json_loads(raw):
+    """Return dict/list from a messy JSON-looking string (code fences, quotes, etc.)."""
+    if isinstance(raw, (dict, list)) or raw is None:
+        return raw
+
+    s = str(raw).strip().lstrip("\ufeff")  # drop BOM if present
+
+    # Drop one pair of wrapping quotes if present
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1].strip()
+
+    # Remove Markdown code fences like ```json ... ```
+    s = re.sub(r'^\s*```[a-zA-Z0-9_-]*\s*', '', s)
+    s = re.sub(r'\s*```\s*$', '', s)
+    s = s.strip()
+
+    # If there’s leading chatter, cut to the first object/array
+    starts = [p for p in (s.find('{'), s.find('[')) if p != -1]
+    if starts:
+        s = s[min(starts):]
+
+    # First attempt: straight parse
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        # Fallback: clip to a balanced top-level {...} or [...]
+        def clip_balanced(text):
+            opens = {'{': '}', '[': ']'}
+            if not text or text[0] not in opens:
+                return text
+            open_ch, close_ch = text[0], opens[text[0]]
+            depth, in_str, esc = 0, False, False
+            for i, ch in enumerate(text):
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == '\\':
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch == open_ch:
+                    depth += 1
+                elif ch == close_ch:
+                    depth -= 1
+                    if depth == 0:
+                        return text[:i+1]
+            return text  # give up—let json.loads raise below
+
+        clipped = clip_balanced(s)
+        logger.info(f"!!!Clipped {clipped}")
+        return json.loads(clipped)
+
+
 def get_current_timestamp():
     now = datetime.datetime.now()
     return now.strftime("%Y-%m-%d-%H-%M-%S")

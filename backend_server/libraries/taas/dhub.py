@@ -3,7 +3,7 @@ import logging
 import uuid
 from time import sleep
 
-from libraries.taas.base import Base
+from backend_server.libraries.taas.base import Base
 
 logger = logging.getLogger(__name__)
 
