@@ -50,6 +50,7 @@ interface TaskManagementPanelProps {
   token: string | null;
   user: AuthenticatedUser | null;
   onNotify: (notification: NotificationState) => void;
+  active: boolean;
 }
 
 function resolveAssetUrl(baseUrl: string, path: string): string {
@@ -61,7 +62,8 @@ export default function TaskManagementPanel({
   baseUrl,
   token,
   user,
-  onNotify
+  onNotify,
+  active
 }: TaskManagementPanelProps) {
   const [tasks, setTasks] = useState<TaskCollectionResponse | null>(null);
   const [statusContent, setStatusContent] = useState("");
@@ -235,37 +237,55 @@ export default function TaskManagementPanel({
     return "Queued";
   }, []);
 
-  function requireToken(): string | null {
+  const requireToken = useCallback((): string | null => {
     if (!token) {
       onNotify({ message: "Log in to manage tasks", severity: "warning" });
       return null;
     }
     return token;
-  }
+  }, [token, onNotify]);
 
-  async function refreshTasks() {
-    const authToken = requireToken();
-    if (!authToken) {
+  const refreshTasks = useCallback(
+    async (options?: { silent?: boolean }) => {
+      const authToken = requireToken();
+      if (!authToken) {
+        return;
+      }
+      setLoading(true);
+      const result = await apiRequest<TaskCollectionResponse>(
+        baseUrl,
+        "get",
+        "/tasks",
+        undefined,
+        authToken
+      );
+      setLoading(false);
+      if (result.ok) {
+        if (!options?.silent) {
+          onNotify({ message: "Fetched tasks", severity: "success" });
+        }
+        setTasks(result.data ?? null);
+      } else {
+        const message = result.error ?? `Request failed with ${result.status}`;
+        onNotify({ message, severity: "error" });
+        setTasks(null);
+      }
+    },
+    [baseUrl, onNotify, requireToken]
+  );
+
+  useEffect(() => {
+    if (!active) {
       return;
     }
-    setLoading(true);
-    const result = await apiRequest<TaskCollectionResponse>(
-      baseUrl,
-      "get",
-      "/tasks",
-      undefined,
-      authToken
-    );
-    setLoading(false);
-    if (result.ok) {
-      onNotify({ message: "Fetched tasks", severity: "success" });
-      setTasks(result.data ?? null);
-    } else {
-      const message = result.error ?? `Request failed with ${result.status}`;
-      onNotify({ message, severity: "error" });
-      setTasks(null);
-    }
-  }
+    void refreshTasks({ silent: true });
+    const intervalId = window.setInterval(() => {
+      void refreshTasks({ silent: true });
+    }, 30000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [active, refreshTasks]);
 
   async function loadStatus() {
     const trimmed = taskId.trim();
@@ -480,7 +500,9 @@ export default function TaskManagementPanel({
       <Button
         startIcon={<RefreshIcon />}
         variant="outlined"
-        onClick={refreshTasks}
+        onClick={() => {
+          void refreshTasks();
+        }}
         disabled={disableActions}
         sx={{ alignSelf: "flex-start" }}
       >

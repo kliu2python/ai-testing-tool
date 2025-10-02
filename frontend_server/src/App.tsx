@@ -237,6 +237,7 @@ export default function App() {
                 token={token}
                 user={user}
                 onNotify={showNotification}
+                active={activeTab === 2}
               />
             </TabPanel>
           </Stack>
