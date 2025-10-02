@@ -229,8 +229,9 @@ def generate_next_action(
     _page_src = read_file_content(page_source_file) or ""
     _history_actions_str = "\n".join(_history_actions)
 
-    if resolved_mode == "vision" and not screen_description and screenshot_path:
+    if not screen_description and screenshot_path:
         screen_description = _describe_screenshot_with_vision_model(screenshot_path)
+        logger.info(f"The screen description is {screen_description}")
 
     user_content: List[Dict[str, Any]] = [
         {"type": "text", "text": f"# Task \n {_task}"},
