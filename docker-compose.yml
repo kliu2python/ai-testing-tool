@@ -11,6 +11,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL:-INFO}
+      BACKEND_LOG_FILE: /logs/backend.log
     volumes:
       - /home/fortinet/app_db:/data
       - /home/fortinet/app_reports:/app/reports
@@ -25,6 +26,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL:-INFO}
+      BACKEND_LOG_FILE: /logs/backend.log
     volumes:
       - /home/fortinet/app_db:/data
       - /home/fortinet/app_reports:/app/reports
@@ -50,3 +52,4 @@ services:
 volumes:
   backend-data:
   redis-data:
+  backend-logs:

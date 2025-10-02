@@ -7,10 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # This is your "cd"
 WORKDIR /app
 
-# Location for persistent application data such as the SQLite database.
-RUN mkdir -p /data
+# Location for persistent application data such as the SQLite database and logs.
+RUN mkdir -p /data /logs
 ENV AITOOL_DB_PATH=/data/auth.db
-VOLUME ["/data"]
+VOLUME ["/data", "/logs"]
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
