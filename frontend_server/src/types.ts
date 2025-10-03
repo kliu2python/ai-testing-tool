@@ -21,11 +21,29 @@ export interface AuthResponse {
   user: AuthenticatedUser;
 }
 
+export interface AutomationTaskDefinition {
+  name: string;
+  details: string;
+  scope?: string;
+  skip?: boolean;
+  target?: string;
+  apps?: string[];
+  [extra: string]: unknown;
+}
+
+export interface TargetConfiguration {
+  name: string;
+  platform: string;
+  server?: string;
+  default?: boolean;
+}
+
 export interface RunTaskPayload {
   prompt: string;
-  tasks: unknown[];
+  tasks: AutomationTaskDefinition[];
   server: string;
-  platform: string;
+  platform?: string;
+  targets?: TargetConfiguration[];
   reports_folder: string;
   debug: boolean;
   repeat: number;

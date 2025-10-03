@@ -1,49 +1,60 @@
 import { useEffect, useState } from "react";
 import {
   Button,
+  Card,
+  CardContent,
+  CardHeader,
+  Divider,
   FormControlLabel,
+  IconButton,
   MenuItem,
   Stack,
   Switch,
   TextField,
+  Tooltip,
   Typography
 } from "@mui/material";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 
 import { apiRequest, formatPayload } from "../api";
 import type {
+  AutomationTaskDefinition,
   LlmMode,
   NotificationState,
   RunResponse,
-  RunTaskPayload
+  RunTaskPayload,
+  TargetConfiguration
 } from "../types";
 import defaultPrompt from "../prompts/default.md?raw";
 import JsonOutput from "./JsonOutput";
 
-const SAMPLE_TASKS = JSON.stringify(
-  [
-    {
-      name: "activate fortitoken using activation code",
-      details: "When you open app FortiToken Mobile, you should use activate code 'GEAD2IZEHWDN2SLTTWIMMFX6LW4GXTH35WJDWNUVZPDZTJZB6DAJISUSWPA7ORNB' to activate a token by click Add button, name it ai token. You should see error message said: already activated",
-      scope: "functional",
-      skip: false,
-      steps: [],
-      apps: ["FortiToken-Mobile"]
-    }
-  ],
-  null,
-  2
-);
-
-const DEFAULT_PROMPT = defaultPrompt;
-
 type PromptOption = "default" | "web" | "custom";
 type PlatformOption = "android" | "ios" | "web";
 
+interface TaskFormState {
+  id: string;
+  name: string;
+  details: string;
+  scope: string;
+  skip: boolean;
+  target: string;
+  apps: string;
+}
+
+interface TargetFormState {
+  id: string;
+  name: string;
+  platform: PlatformOption;
+  server: string;
+  default: boolean;
+}
+
 const PROMPT_TEMPLATES: Record<Exclude<PromptOption, "custom">, string> = {
-  default: DEFAULT_PROMPT,
-  web: DEFAULT_PROMPT
+  default: defaultPrompt,
+  web: defaultPrompt
 };
 
 const PLATFORM_SERVERS: Record<PlatformOption, string> = {
@@ -51,6 +62,51 @@ const PLATFORM_SERVERS: Record<PlatformOption, string> = {
   ios: "http://10.160.13.112:4723",
   web: "http://10.160.24.88:31590"
 };
+
+const SAMPLE_TASK_PRESET: Omit<TaskFormState, "id"> = {
+  name: "activate fortitoken using activation code",
+  details:
+    "When you open app FortiToken Mobile, you should use activate code 'GEAD2IZEHWDN2SLTTWIMMFX6LW4GXTH35WJDWNUVZPDZTJZB6DAJISUSWPA7ORNB' to activate a token by click Add button, name it ai token. You should see error message said: already activated",
+  scope: "functional",
+  skip: false,
+  target: "",
+  apps: "FortiToken-Mobile"
+};
+
+function generateId(prefix: string): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createTask(
+  overrides: Partial<Omit<TaskFormState, "id">> = {}
+): TaskFormState {
+  return {
+    id: generateId("task"),
+    name: "",
+    details: "",
+    scope: "",
+    skip: false,
+    target: "",
+    apps: "",
+    ...overrides
+  };
+}
+
+function createTarget(
+  overrides: Partial<Omit<TargetFormState, "id">> = {}
+): TargetFormState {
+  const platform = overrides.platform ?? "android";
+  const defaultServer = PLATFORM_SERVERS[platform];
+  const server = overrides.server ?? defaultServer;
+  return {
+    id: generateId("target"),
+    name: "",
+    default: false,
+    ...overrides,
+    platform,
+    server
+  };
+}
 
 interface RunTaskFormProps {
   baseUrl: string;
@@ -65,7 +121,10 @@ export default function RunTaskForm({
 }: RunTaskFormProps) {
   const [promptOption, setPromptOption] = useState<PromptOption>("default");
   const [customPrompt, setCustomPrompt] = useState("");
-  const [tasksJson, setTasksJson] = useState(SAMPLE_TASKS);
+  const [taskForms, setTaskForms] = useState<TaskFormState[]>(() => [
+    createTask(SAMPLE_TASK_PRESET)
+  ]);
+  const [targetForms, setTargetForms] = useState<TargetFormState[]>([]);
   const [platform, setPlatform] = useState<PlatformOption>("android");
   const [server, setServer] = useState(PLATFORM_SERVERS.android);
   const [reportsFolder, setReportsFolder] = useState("./reports");
@@ -110,6 +169,71 @@ export default function RunTaskForm({
     }
   }
 
+  function handleAddTask() {
+    setTaskForms((current) => [...current, createTask()]);
+  }
+
+  function handleRemoveTask(id: string) {
+    setTaskForms((current) => current.filter((task) => task.id !== id));
+  }
+
+  function handleTaskChange(
+    id: string,
+    patch: Partial<Omit<TaskFormState, "id">>
+  ) {
+    setTaskForms((current) =>
+      current.map((task) => (task.id === id ? { ...task, ...patch } : task))
+    );
+  }
+
+  function handleAddTarget() {
+    setTargetForms((current) => [...current, createTarget()]);
+  }
+
+  function handleRemoveTarget(id: string) {
+    setTargetForms((current) => current.filter((target) => target.id !== id));
+  }
+
+  function handleTargetChange(
+    id: string,
+    patch: Partial<Omit<TargetFormState, "id">>
+  ) {
+    setTargetForms((current) =>
+      current.map((target) => (target.id === id ? { ...target, ...patch } : target))
+    );
+  }
+
+  function handleTargetPlatformChange(id: string, nextPlatform: PlatformOption) {
+    setTargetForms((current) =>
+      current.map((target) => {
+        if (target.id !== id) {
+          return target;
+        }
+        const previousDefault = PLATFORM_SERVERS[target.platform];
+        const shouldUseDefault =
+          !target.server || target.server === previousDefault;
+        return {
+          ...target,
+          platform: nextPlatform,
+          server: shouldUseDefault
+            ? PLATFORM_SERVERS[nextPlatform]
+            : target.server
+        };
+      })
+    );
+  }
+
+  function handleTargetDefaultToggle(id: string, enabled: boolean) {
+    setTargetForms((current) =>
+      current.map((target) => {
+        if (target.id === id) {
+          return { ...target, default: enabled };
+        }
+        return enabled ? { ...target, default: false } : target;
+      })
+    );
+  }
+
   async function handleSubmit() {
     if (!token) {
       onNotify({
@@ -127,18 +251,52 @@ export default function RunTaskForm({
       return;
     }
 
-    let tasks: unknown[];
-    try {
-      const parsed = tasksJson ? JSON.parse(tasksJson) : [];
-      if (!Array.isArray(parsed)) {
-        throw new Error("Tasks must be a JSON array");
-      }
-      tasks = parsed;
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Invalid tasks JSON payload";
-      onNotify({ message, severity: "error" });
+    if (taskForms.length === 0) {
+      onNotify({
+        message: "Add at least one task to run",
+        severity: "warning"
+      });
       return;
+    }
+
+    const preparedTasks: AutomationTaskDefinition[] = [];
+    for (const task of taskForms) {
+      const name = task.name.trim();
+      const details = task.details.trim();
+      if (!name) {
+        onNotify({
+          message: "Each task requires a name",
+          severity: "warning"
+        });
+        return;
+      }
+      if (!details) {
+        onNotify({
+          message: `Provide execution details for task "${name}"`,
+          severity: "warning"
+        });
+        return;
+      }
+      const payload: AutomationTaskDefinition = { name, details };
+      const scope = task.scope.trim();
+      if (scope) {
+        payload.scope = scope;
+      }
+      if (task.skip) {
+        payload.skip = true;
+      }
+      const targetAlias = task.target.trim();
+      if (targetAlias) {
+        payload.target = targetAlias;
+      }
+      const apps = task.apps
+        .split(",")
+        .map((app) => app.trim())
+        .filter(Boolean);
+      if (apps.length > 0) {
+        payload.apps = apps;
+      }
+      preparedTasks.push(payload);
     }
 
     if (!Number.isFinite(repeatCount) || repeatCount < 1) {
@@ -149,16 +307,59 @@ export default function RunTaskForm({
       return;
     }
 
+    let preparedTargets: TargetConfiguration[] | undefined;
+    if (targetForms.length > 0) {
+      const seen = new Set<string>();
+      preparedTargets = [];
+      for (const target of targetForms) {
+        const name = target.name.trim();
+        if (!name) {
+          onNotify({
+            message: "Each automation target requires a unique name",
+            severity: "warning"
+          });
+          return;
+        }
+        if (seen.has(name)) {
+          onNotify({
+            message: `Duplicate target name "${name}" is not allowed`,
+            severity: "warning"
+          });
+          return;
+        }
+        seen.add(name);
+        const targetConfig: TargetConfiguration = {
+          name,
+          platform: target.platform
+        };
+        const serverUrl = target.server.trim();
+        if (serverUrl) {
+          targetConfig.server = serverUrl;
+        }
+        if (target.default) {
+          targetConfig.default = true;
+        }
+        preparedTargets.push(targetConfig);
+      }
+    }
+
     const payload: RunTaskPayload = {
       prompt: promptValue,
-      tasks,
+      tasks: preparedTasks,
       server,
-      platform,
       reports_folder: reportsFolder,
       debug,
       repeat: repeatCount,
       llm_mode: llmMode
     };
+
+    if (targetForms.length === 0) {
+      payload.platform = platform;
+    }
+
+    if (preparedTargets && preparedTargets.length > 0) {
+      payload.targets = preparedTargets;
+    }
 
     setSubmitting(true);
     const result = await apiRequest<RunResponse>(
@@ -221,7 +422,8 @@ export default function RunTaskForm({
           alignItems={{ xs: "flex-start", sm: "center" }}
         >
           <Typography variant="body2" color="text.secondary">
-            Using the {promptOption === "default" ? "default" : "web"} prompt template.
+            Using the {promptOption === "default" ? "default" : "web"} prompt
+            template.
           </Typography>
           <Button
             variant="outlined"
@@ -233,14 +435,203 @@ export default function RunTaskForm({
           </Button>
         </Stack>
       )}
-      <TextField
-        label="Tasks (JSON list)"
-        value={tasksJson}
-        onChange={(event) => setTasksJson(event.target.value)}
-        fullWidth
-        multiline
-        minRows={8}
-      />
+
+      <Divider flexItem>
+        <Typography variant="subtitle1" fontWeight={600}>
+          Task Details
+        </Typography>
+      </Divider>
+
+      <Stack spacing={2}>
+        {taskForms.map((task, index) => {
+          const canRemove = taskForms.length > 1;
+          return (
+            <Card key={task.id} variant="outlined">
+              <CardHeader
+                title={`Task ${index + 1}`}
+                action={
+                  <Tooltip title={canRemove ? "Remove task" : "At least one task is required"}>
+                    <span>
+                      <IconButton
+                        aria-label="remove-task"
+                        onClick={() => handleRemoveTask(task.id)}
+                        disabled={!canRemove}
+                        size="small"
+                      >
+                        <DeleteOutlineIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                }
+              />
+              <CardContent>
+                <Stack spacing={2}>
+                  <TextField
+                    label="Name"
+                    value={task.name}
+                    onChange={(event) =>
+                      handleTaskChange(task.id, { name: event.target.value })
+                    }
+                    fullWidth
+                    required
+                  />
+                  <TextField
+                    label="Details"
+                    value={task.details}
+                    onChange={(event) =>
+                      handleTaskChange(task.id, { details: event.target.value })
+                    }
+                    fullWidth
+                    required
+                    multiline
+                    minRows={4}
+                  />
+                  <TextField
+                    label="Scope (optional)"
+                    value={task.scope}
+                    onChange={(event) =>
+                      handleTaskChange(task.id, { scope: event.target.value })
+                    }
+                    fullWidth
+                    placeholder="functional"
+                  />
+                  <TextField
+                    label="Target alias (optional)"
+                    value={task.target}
+                    onChange={(event) =>
+                      handleTaskChange(task.id, { target: event.target.value })
+                    }
+                    fullWidth
+                    helperText="Direct the task to a specific automation target."
+                  />
+                  <TextField
+                    label="Apps to activate (comma separated)"
+                    value={task.apps}
+                    onChange={(event) =>
+                      handleTaskChange(task.id, { apps: event.target.value })
+                    }
+                    fullWidth
+                  />
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={task.skip}
+                        onChange={(event) =>
+                          handleTaskChange(task.id, { skip: event.target.checked })
+                        }
+                      />
+                    }
+                    label="Skip this task"
+                  />
+                </Stack>
+              </CardContent>
+            </Card>
+          );
+        })}
+        <Button
+          variant="outlined"
+          startIcon={<AddCircleOutlineIcon />}
+          onClick={handleAddTask}
+        >
+          Add another task
+        </Button>
+      </Stack>
+
+      <Divider flexItem>
+        <Typography variant="subtitle1" fontWeight={600}>
+          Automation Targets (optional)
+        </Typography>
+      </Divider>
+
+      <Typography variant="body2" color="text.secondary">
+        Define multiple automation targets to coordinate cross-platform runs.
+        When targets are provided, the global platform selection becomes
+        optional.
+      </Typography>
+
+      <Stack spacing={2}>
+        {targetForms.map((target) => (
+          <Card key={target.id} variant="outlined">
+            <CardHeader
+              title={target.name || "New target"}
+              action={
+                <Tooltip title="Remove target">
+                  <IconButton
+                    aria-label="remove-target"
+                    onClick={() => handleRemoveTarget(target.id)}
+                    size="small"
+                  >
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              }
+            />
+            <CardContent>
+              <Stack spacing={2}>
+                <TextField
+                  label="Target name"
+                  value={target.name}
+                  onChange={(event) =>
+                    handleTargetChange(target.id, { name: event.target.value })
+                  }
+                  fullWidth
+                  required
+                />
+                <TextField
+                  select
+                  label="Platform"
+                  value={target.platform}
+                  onChange={(event) =>
+                    handleTargetPlatformChange(
+                      target.id,
+                      event.target.value as PlatformOption
+                    )
+                  }
+                  fullWidth
+                >
+                  <MenuItem value="android">Android</MenuItem>
+                  <MenuItem value="ios">iOS</MenuItem>
+                  <MenuItem value="web">Web</MenuItem>
+                </TextField>
+                <TextField
+                  label="Automation server"
+                  value={target.server}
+                  onChange={(event) =>
+                    handleTargetChange(target.id, { server: event.target.value })
+                  }
+                  fullWidth
+                  helperText="Override the default server or leave as-is to use the suggested endpoint."
+                />
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={target.default}
+                      onChange={(event) =>
+                        handleTargetDefaultToggle(target.id, event.target.checked)
+                      }
+                    />
+                  }
+                  label="Mark as default context"
+                />
+              </Stack>
+            </CardContent>
+          </Card>
+        ))}
+        <Button
+          variant="outlined"
+          startIcon={<AddCircleOutlineIcon />}
+          onClick={handleAddTarget}
+        >
+          Add automation target
+        </Button>
+      </Stack>
+
+      <Divider flexItem>
+        <Typography variant="subtitle1" fontWeight={600}>
+          Execution Settings
+        </Typography>
+      </Divider>
+
       <TextField
         select
         label="Platform"
@@ -251,6 +642,8 @@ export default function RunTaskForm({
           setServer(PLATFORM_SERVERS[nextPlatform]);
         }}
         fullWidth
+        helperText="Used when no specific automation targets are defined."
+        disabled={targetForms.length > 0}
       >
         <MenuItem value="android">Android</MenuItem>
         <MenuItem value="ios">iOS</MenuItem>
@@ -315,6 +708,9 @@ export default function RunTaskForm({
       >
         Submit Run Request
       </Button>
+      {response ? (
+        <JsonOutput title="Run Response" content={response} />
+      ) : null}
     </Stack>
   );
 }

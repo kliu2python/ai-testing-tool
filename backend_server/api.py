@@ -20,7 +20,7 @@ import logging
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, EmailStr, Field, ValidationError
+from pydantic import BaseModel, EmailStr, Field, ValidationError, root_validator
 from redis.asyncio import Redis
 
 from backend_server.task_queue import (
@@ -366,8 +366,8 @@ class RunRequest(BaseModel):
         "http://localhost:4723",
         description="Automation server address (e.g., Appium/Selenium).",
     )
-    platform: Platform = Field(
-        Platform.android,
+    platform: Optional[Platform] = Field(
+        default=None,
         description="Platform against which to run the tasks.",
     )
     targets: Optional[List[TargetConfig]] = Field(
@@ -396,6 +396,16 @@ class RunRequest(BaseModel):
         LlmMode.auto,
         description="Preferred model mode: auto-select, text-only, or vision-enabled.",
     )
+
+    @root_validator
+    def _ensure_platform_or_targets(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        platform = values.get("platform")
+        targets = values.get("targets")
+        if (not targets or len(targets) == 0) and platform is None:
+            raise ValueError(
+                "A platform must be provided when no automation targets are configured"
+            )
+        return values
 
 
 class RunResponse(BaseModel):
@@ -595,7 +605,7 @@ async def run_automation(
     """Enqueue automation tasks to be executed by the background runner."""
 
     redis = _redis_client()
-    request_payload = request.dict()
+    request_payload = request.dict(exclude_none=True)
     repeat = max(1, request_payload.get("repeat", 1))
     base_payload = dict(request_payload)
     base_payload.pop("repeat", None)

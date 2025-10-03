@@ -576,7 +576,7 @@ def create_driver(_server, _platform="android",
 
 def _prepare_target_contexts(
     server: str,
-    platform: str,
+    platform: Optional[str],
     targets: Optional[List[Dict[str, Any]]],
 ) -> Tuple[Dict[str, TargetContext], str]:
     """Create drivers for all requested targets and return them."""
@@ -605,6 +605,10 @@ def _prepare_target_contexts(
             is_default = bool(cfg.get("default") or cfg.get("is_default"))
             configs.append((alias, str(target_server), str(target_platform), is_default))
     else:
+        if not platform:
+            raise ValueError(
+                "A platform must be provided when no targets are configured"
+            )
         alias = platform or "default"
         configs.append((alias, server, platform, True))
 
@@ -1378,7 +1382,7 @@ def _run_tasks(
     prompt: str,
     tasks: List[Dict[str, Any]],
     server: str,
-    platform: str,
+    platform: Optional[str],
     reports_folder: str,
     debug: bool = False,
     task_id: Optional[str] = None,
@@ -1689,7 +1693,7 @@ def run_tasks(
     prompt: str,
     tasks: List[Dict[str, Any]],
     server: str,
-    platform: str,
+    platform: Optional[str],
     reports_folder: str,
     debug: bool = False,
     task_id: Optional[str] = None,
@@ -1715,7 +1719,7 @@ async def run_tasks_async(
     prompt: str,
     tasks: List[Dict[str, Any]],
     server: str,
-    platform: str,
+    platform: Optional[str],
     reports_folder: str,
     debug: bool = False,
     task_id: Optional[str] = None,
