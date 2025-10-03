@@ -329,6 +329,24 @@ class Platform(str, Enum):
     web = "web"
 
 
+class TargetConfig(BaseModel):
+    """Automation target definition for multi-platform runs."""
+
+    name: str = Field(..., description="Unique alias used to reference the target.")
+    platform: Platform = Field(..., description="Platform handled by this target.")
+    server: Optional[str] = Field(
+        None,
+        description=(
+            "Automation server URL for this target. Defaults to the top-level "
+            "`server` value when omitted."
+        ),
+    )
+    default: bool = Field(
+        False,
+        description="Mark this target as the default context for autonomous steps.",
+    )
+
+
 class LlmMode(str, Enum):
     """Inference modes for the action generation model."""
 
@@ -351,6 +369,14 @@ class RunRequest(BaseModel):
     platform: Platform = Field(
         Platform.android,
         description="Platform against which to run the tasks.",
+    )
+    targets: Optional[List[TargetConfig]] = Field(
+        default=None,
+        description=(
+            "Optional list of automation targets to initialise. When provided, "
+            "the entries override the top-level `server`/`platform` configuration "
+            "and allow cross-platform coordination."
+        ),
     )
     reports_folder: str = Field(
         "./reports",

@@ -53,6 +53,20 @@ class RunResult:
     summary_path: str
 
 
+@dataclass
+class TargetContext:
+    """Runtime metadata for an automation target/driver."""
+
+    name: str
+    platform: str
+    server: str
+    driver: Any
+    page_source: Optional[str] = None
+    screenshot: Optional[str] = None
+    screen_description: Optional[str] = None
+    keepalive_thread: Optional[threading.Thread] = None
+
+
 _EXECUTOR: Optional[ThreadPoolExecutor] = None
 _EXECUTOR_LOCK = threading.Lock()
 
@@ -86,6 +100,56 @@ def create_folder(folder_path):
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
     return folder_path
+
+
+def _normalise_target_name(name: str) -> str:
+    """Return a filesystem-friendly representation of ``name``."""
+
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", (name or "").strip())
+    cleaned = cleaned.strip("_")
+    return cleaned or "target"
+
+
+def _choose_target_alias(
+    targets: Dict[str, TargetContext],
+    desired_alias: Optional[str],
+    platform_hint: Optional[str],
+    default_alias: str,
+) -> Tuple[str, Optional[str]]:
+    """Resolve which target alias should be used for an action.
+
+    Returns the selected alias and an optional error message when the requested
+    alias/platform could not be matched.
+    """
+
+    if desired_alias:
+        alias = str(desired_alias)
+        if alias in targets:
+            return alias, None
+        return default_alias, f"unknown target '{alias}'"
+
+    if platform_hint:
+        platform = str(platform_hint).lower()
+        for alias, ctx in targets.items():
+            if (ctx.platform or "").lower() == platform:
+                return alias, None
+        return default_alias, f"no target configured for platform '{platform_hint}'"
+
+    return default_alias, None
+
+
+def _step_page_name(step_index: int, target_alias: str, multi_target: bool) -> str:
+    base = f"step{step_index}"
+    if multi_target:
+        base = f"{base}_{_normalise_target_name(target_alias)}"
+    return base
+
+
+def _step_screenshot_name(step_index: int, target_alias: str, multi_target: bool) -> str:
+    base = f"step_{step_index}"
+    if multi_target:
+        base = f"{base}_{_normalise_target_name(target_alias)}"
+    return base
 
 
 def image_to_base64(image_path: str) -> Optional[str]:
@@ -224,6 +288,8 @@ def generate_next_action(
     screenshot_path: Optional[str],
     llm_mode: str,
     screen_description: Optional[str] = None,
+    available_targets: Optional[Dict[str, Dict[str, str]]] = None,
+    active_target: Optional[str] = None,
 ) -> str:
     resolved_mode = _normalise_llm_mode(llm_mode)
     _page_src = read_file_content(page_source_file) or ""
@@ -242,6 +308,32 @@ def generate_next_action(
     if screen_description:
         user_content.append(
             {"type": "text", "text": f"# Screen Description \n {screen_description}"}
+        )
+    if available_targets:
+        target_lines = ["# Available Targets"]
+        for alias, meta in available_targets.items():
+            platform = meta.get("platform") if meta else None
+            server = meta.get("server") if meta else None
+            details = [f"platform={platform}" if platform else None]
+            if server:
+                details.append(f"server={server}")
+            details = ", ".join(filter(None, details))
+            if details:
+                target_lines.append(f"- {alias}: {details}")
+            else:
+                target_lines.append(f"- {alias}")
+        target_lines.append(
+            "When proposing an action JSON include a 'target' field to choose "
+            "which device/session should execute it."
+        )
+        target_lines.append(
+            "Omit the 'target' field to keep using the active context."
+        )
+        user_content.append({"type": "text", "text": "\n".join(target_lines)})
+
+    if active_target:
+        user_content.append(
+            {"type": "text", "text": f"# Active Target \n {active_target}"}
         )
     elif resolved_mode == "vision":
         logger.debug(
@@ -480,6 +572,83 @@ def create_driver(_server, _platform="android",
             )
 
     raise ValueError(f"Unsupported platform: {_platform}")
+
+
+def _prepare_target_contexts(
+    server: str,
+    platform: str,
+    targets: Optional[List[Dict[str, Any]]],
+) -> Tuple[Dict[str, TargetContext], str]:
+    """Create drivers for all requested targets and return them."""
+
+    configs: List[Tuple[str, str, str, bool]] = []
+
+    if targets:
+        for index, raw_cfg in enumerate(targets):
+            cfg = dict(raw_cfg or {})
+            alias = str(
+                cfg.get("name")
+                or cfg.get("alias")
+                or cfg.get("id")
+                or f"target{index + 1}"
+            )
+            target_platform = cfg.get("platform") or platform
+            target_server = cfg.get("server") or server
+            if not target_platform:
+                raise ValueError(
+                    f"Target '{alias}' is missing a platform configuration"
+                )
+            if not target_server:
+                raise ValueError(
+                    f"Target '{alias}' is missing an automation server"
+                )
+            is_default = bool(cfg.get("default") or cfg.get("is_default"))
+            configs.append((alias, str(target_server), str(target_platform), is_default))
+    else:
+        alias = platform or "default"
+        configs.append((alias, server, platform, True))
+
+    contexts: Dict[str, TargetContext] = {}
+    default_alias: Optional[str] = None
+    created: List[TargetContext] = []
+
+    try:
+        for alias, target_server, target_platform, is_default in configs:
+            if alias in contexts:
+                raise ValueError(f"Duplicate target alias '{alias}'")
+
+            driver = create_driver(target_server, target_platform)
+            driver.implicitly_wait(0.2)
+            keepalive_thread = threading.Thread(
+                target=lambda d=driver: keep_driver_live(d), daemon=True
+            )
+            keepalive_thread.start()
+
+            ctx = TargetContext(
+                name=alias,
+                platform=str(target_platform).lower(),
+                server=target_server,
+                driver=driver,
+                keepalive_thread=keepalive_thread,
+            )
+            contexts[alias] = ctx
+            created.append(ctx)
+            if is_default or default_alias is None:
+                default_alias = alias
+    except Exception:
+        for ctx in created:
+            try:
+                ctx.driver.quit()
+            except Exception:
+                pass
+        raise
+
+    if not contexts:
+        raise ValueError("At least one automation target is required")
+
+    default_alias = default_alias or next(iter(contexts))
+
+    return contexts, default_alias
 
 
 # Helpers for app switching
@@ -1214,26 +1383,44 @@ def _run_tasks(
     debug: bool = False,
     task_id: Optional[str] = None,
     llm_mode: Optional[str] = None,
+    targets: Optional[List[Dict[str, Any]]] = None,
 ) -> RunResult:
-    """Execute tasks using the configured automation server."""
+    """Execute tasks using one or more automation targets."""
 
     create_folder(reports_folder)
     run_identifier = task_id or get_current_timestamp()
-    driver = create_driver(server, platform)
-    driver.implicitly_wait(0.2)
-    thread = threading.Thread(target=lambda: keep_driver_live(driver), daemon=True)
-    thread.start()
-
-    logger.info(
-        "Starting run %s with %d task(s) on %s via %s",
-        run_identifier,
-        len(tasks),
-        platform,
-        server,
+    target_contexts, default_target = _prepare_target_contexts(
+        server, platform, targets
     )
+    multi_target = len(target_contexts) > 1
+
+    if multi_target:
+        descriptor = ", ".join(
+            f"{alias} ({ctx.platform}) via {ctx.server}" for alias, ctx in target_contexts.items()
+        )
+        logger.info(
+            "Starting run %s with %d task(s) on targets: %s",
+            run_identifier,
+            len(tasks),
+            descriptor,
+        )
+    else:
+        alias, ctx = next(iter(target_contexts.items()))
+        logger.info(
+            "Starting run %s with %d task(s) on %s via %s",
+            run_identifier,
+            len(tasks),
+            ctx.platform,
+            ctx.server,
+        )
 
     summary: List[dict] = []
     summary_path = ""
+
+    available_targets_meta = {
+        alias: {"platform": ctx.platform, "server": ctx.server}
+        for alias, ctx in target_contexts.items()
+    }
 
     try:
         for task in tasks:
@@ -1251,14 +1438,45 @@ def _run_tasks(
             task_folder = create_folder(reports_path)
             write_to_file(f"{task_folder}/task.json", json.dumps(task))
             sleep(1)
-            page_source_for_next_step = take_page_source(driver, task_folder, "step0")
-            page_screenshot_for_next_step = take_screenshot(driver, task_folder, "step_0")
-            history_actions: List[str] = []
-            step = 0
+
             effective_llm_mode = _resolve_task_llm_mode(llm_mode, task)
             logger.debug(
                 "Using '%s' mode for task '%s'", effective_llm_mode, task.get("name")
             )
+
+            target_states: Dict[str, Dict[str, Optional[str]]] = {}
+            for alias, ctx in target_contexts.items():
+                page_name = _step_page_name(0, alias, multi_target)
+                screenshot_name = _step_screenshot_name(0, alias, multi_target)
+                page_path = take_page_source(ctx.driver, task_folder, page_name)
+                screenshot_path = take_screenshot(ctx.driver, task_folder, screenshot_name)
+                description = (
+                    _describe_screenshot_with_vision_model(screenshot_path)
+                    if effective_llm_mode == "vision" and screenshot_path
+                    else None
+                )
+                target_states[alias] = {
+                    "page": page_path,
+                    "screenshot": screenshot_path,
+                    "description": description,
+                }
+
+            history_actions: List[str] = []
+            step = 0
+            current_target, selection_error = _choose_target_alias(
+                target_contexts,
+                task.get("target") or task.get("default_target"),
+                task.get("platform"),
+                default_target,
+            )
+            if selection_error:
+                logger.warning(
+                    "Task '%s' requested %s; defaulting to '%s'",
+                    name,
+                    selection_error,
+                    current_target,
+                )
+
             task_result = {
                 "name": name,
                 "scope": scope,
@@ -1268,34 +1486,81 @@ def _run_tasks(
             }
 
             if steps:
-                for step_action in steps:
+                for raw_step in steps:
                     step += 1
-                    next_action = json.dumps(step_action)
+                    step_action = dict(raw_step)
+                    desired_alias = (
+                        step_action.get("target")
+                        or step_action.get("device")
+                        or step_action.get("session")
+                    )
+                    platform_hint = (
+                        step_action.get("platform")
+                        or step_action.get("platformName")
+                        or step_action.get("platform_name")
+                    )
+                    target_alias, alias_error = _choose_target_alias(
+                        target_contexts,
+                        desired_alias,
+                        platform_hint,
+                        current_target,
+                    )
+                    step_action.setdefault("target", target_alias)
+                    step_action.setdefault(
+                        "platform", target_contexts[target_alias].platform
+                    )
+                    if alias_error:
+                        step_action["result"] = alias_error
+                        serialised = json.dumps(step_action)
+                        write_to_file(f"{task_folder}/step{step}.json", serialised)
+                        task_result["steps"].append(json.loads(serialised))
+                        current_target = target_alias
+                        continue
+
+                    artifact_name = _step_page_name(step, target_alias, multi_target)
                     (
-                        page_source_for_next_step,
-                        _,
+                        page_path,
+                        screenshot_path,
                         next_action_with_result,
                     ) = process_next_action(
-                        next_action, driver, task_folder, f"step{step}"
+                        step_action,
+                        target_contexts[target_alias].driver,
+                        task_folder,
+                        artifact_name,
                     )
                     write_to_file(
                         f"{task_folder}/step{step}.json",
                         next_action_with_result,
                     )
                     task_result["steps"].append(json.loads(next_action_with_result))
+
+                    state = target_states.setdefault(
+                        target_alias, {"page": None, "screenshot": None, "description": None}
+                    )
+                    state["page"] = page_path
+                    state["screenshot"] = screenshot_path
+                    if effective_llm_mode == "vision" and screenshot_path:
+                        state["description"] = _describe_screenshot_with_vision_model(
+                            screenshot_path
+                        )
+                    current_target = target_alias
             else:
-                while page_source_for_next_step is not None:
-                    step += 1
+                while True:
+                    current_state = target_states.get(current_target)
+                    page_source_for_next_step = (
+                        current_state.get("page") if current_state else None
+                    )
+                    if page_source_for_next_step is None:
+                        break
+
                     page_source = read_file_content(page_source_for_next_step) or ""
                     history_actions_str = "\n".join(history_actions)
-                    screen_description = None
-                    if (
-                        effective_llm_mode == "vision"
-                        and page_screenshot_for_next_step
-                    ):
-                        screen_description = _describe_screenshot_with_vision_model(
-                            page_screenshot_for_next_step
-                        )
+                    screen_description = (
+                        current_state.get("description") if current_state else None
+                    )
+                    screenshot_for_next_step = (
+                        current_state.get("screenshot") if current_state else None
+                    )
                     prompts = [
                         f"# Task \n {details}",
                         f"# History of Actions \n {history_actions_str}",
@@ -1304,31 +1569,76 @@ def _run_tasks(
                     if screen_description:
                         prompts.append(f"# Screen Description \n {screen_description}")
                     write_to_file(
-                        f"{task_folder}/step{step}_prompt.md",
+                        f"{task_folder}/step{step + 1}_prompt.md",
                         "\n".join(prompts),
                     )
 
                     if debug:
-                        next_action = input("next action:")
+                        next_action_raw = input("next action:")
                     else:
-                        next_action = generate_next_action(
+                        next_action_raw = generate_next_action(
                             prompt,
                             details,
                             history_actions,
                             page_source_for_next_step,
-                            page_screenshot_for_next_step,
+                            screenshot_for_next_step,
                             effective_llm_mode,
                             screen_description=screen_description,
+                            available_targets=available_targets_meta,
+                            active_target=current_target,
                         )
 
-                    logger.debug("Step %s: %s", step, next_action)
+                    logger.debug("Step %s: %s", step + 1, next_action_raw)
 
+                    parsed_action = safe_json_loads(next_action_raw)
+                    if not isinstance(parsed_action, dict):
+                        parsed_action = {
+                            "action": "error",
+                            "result": "invalid action format",
+                        }
+
+                    desired_alias = (
+                        parsed_action.get("target")
+                        or parsed_action.get("device")
+                        or parsed_action.get("session")
+                    )
+                    platform_hint = (
+                        parsed_action.get("platform")
+                        or parsed_action.get("platformName")
+                        or parsed_action.get("platform_name")
+                    )
+                    target_alias, alias_error = _choose_target_alias(
+                        target_contexts,
+                        desired_alias,
+                        platform_hint,
+                        current_target,
+                    )
+                    parsed_action["target"] = target_alias
+                    parsed_action.setdefault(
+                        "platform", target_contexts[target_alias].platform
+                    )
+
+                    step += 1
+
+                    if alias_error:
+                        parsed_action["result"] = alias_error
+                        serialised = json.dumps(parsed_action)
+                        write_to_file(f"{task_folder}/step{step}.json", serialised)
+                        history_actions.append(serialised)
+                        task_result["steps"].append(json.loads(serialised))
+                        current_target = target_alias
+                        break
+
+                    artifact_name = _step_page_name(step, target_alias, multi_target)
                     (
-                        page_source_for_next_step,
-                        page_screenshot_for_next_step,
+                        page_path,
+                        screenshot_path,
                         next_action_with_result,
                     ) = process_next_action(
-                        next_action, driver, task_folder, f"step{step}"
+                        parsed_action,
+                        target_contexts[target_alias].driver,
+                        task_folder,
+                        artifact_name,
                     )
                     write_to_file(
                         f"{task_folder}/step{step}.json",
@@ -1336,6 +1646,26 @@ def _run_tasks(
                     )
                     history_actions.append(next_action_with_result)
                     task_result["steps"].append(json.loads(next_action_with_result))
+
+                    state = target_states.setdefault(
+                        target_alias, {"page": None, "screenshot": None, "description": None}
+                    )
+                    state["page"] = page_path
+                    state["screenshot"] = screenshot_path
+                    if effective_llm_mode == "vision" and screenshot_path:
+                        state["description"] = _describe_screenshot_with_vision_model(
+                            screenshot_path
+                        )
+                    elif page_path is None:
+                        state["description"] = None
+
+                    current_target = target_alias
+
+                    action_type = parsed_action.get("action")
+                    if action_type in {"finish", "error"}:
+                        break
+                    if page_path is None:
+                        break
 
             summary.append(task_result)
 
@@ -1345,7 +1675,11 @@ def _run_tasks(
             )
             summary_path = generate_summary_report(summary_folder, summary)
     finally:
-        driver.quit()
+        for ctx in target_contexts.values():
+            try:
+                ctx.driver.quit()
+            except Exception:
+                pass
         logger.info("Finished run %s", run_identifier)
 
     return RunResult(summary=summary, summary_path=summary_path)
@@ -1360,6 +1694,7 @@ def run_tasks(
     debug: bool = False,
     task_id: Optional[str] = None,
     llm_mode: Optional[str] = None,
+    targets: Optional[List[Dict[str, Any]]] = None,
 ) -> RunResult:
     """Run tasks synchronously (backwards compatible helper)."""
 
@@ -1372,6 +1707,7 @@ def run_tasks(
         debug,
         task_id=task_id,
         llm_mode=llm_mode,
+        targets=targets,
     )
 
 
@@ -1384,6 +1720,7 @@ async def run_tasks_async(
     debug: bool = False,
     task_id: Optional[str] = None,
     llm_mode: Optional[str] = None,
+    targets: Optional[List[Dict[str, Any]]] = None,
 ) -> RunResult:
     """Run tasks in a shared background executor for concurrency."""
 
@@ -1399,6 +1736,7 @@ async def run_tasks_async(
         debug,
         task_id,
         llm_mode,
+        targets,
     )
     return await loop.run_in_executor(executor, func)
 

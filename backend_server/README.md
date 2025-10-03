@@ -52,12 +52,42 @@ curl -X POST "http://<server-ip>:8090/run" \
         "tasks": [ ... task definitions ... ],
         "server": "http://localhost:4723",
         "platform": "android",
+        "targets": [
+          {"name": "browser", "platform": "web", "server": "http://localhost:4444", "default": true},
+          {"name": "phone", "platform": "android", "server": "http://localhost:4723"}
+        ],
         "reports_folder": "./reports"
       }'
 ```
 
 The response returns the aggregated summary along with the path to the generated
 `summary.json` report inside the reports directory.
+
+### Coordinating multi-platform flows
+
+When a scenario requires two or more platforms to work together—such as approving
+an MFA challenge on mobile after initiating a login on the web—you can define a
+set of `targets`. Each target initialises its own driver session and is
+referenced by its `name`.
+
+Autonomous tasks can switch between targets by including a `target` field in the
+action JSON returned by the LLM (or by providing it explicitly inside scripted
+steps). If `target` is omitted the agent continues using the current context.
+Targets may also be selected by specifying a `platform` hint in the action
+payload.
+
+Example action emitted by the agent:
+
+```json
+{
+  "action": "tap",
+  "target": "phone",
+  "xpath": "//XCUIElementTypeButton[@name='Approve']"
+}
+```
+
+The runner records the originating target with each step so that the generated
+reports capture both sides of the interaction.
 
 ### Enabling HTTPS/TLS
 
