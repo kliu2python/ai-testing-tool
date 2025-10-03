@@ -61,7 +61,7 @@ def _process_task(redis_client: Any, raw_task: str) -> None:
             task["prompt"],
             task["tasks"],
             task["server"],
-            task["platform"],
+            task.get("platform"),
             reports_folder,
             task["debug"],
             task_id=task_id,
