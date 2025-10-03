@@ -39,10 +39,17 @@ const SAMPLE_TASKS = JSON.stringify(
 const DEFAULT_PROMPT = defaultPrompt;
 
 type PromptOption = "default" | "web" | "custom";
+type PlatformOption = "android" | "ios" | "web";
 
 const PROMPT_TEMPLATES: Record<Exclude<PromptOption, "custom">, string> = {
   default: DEFAULT_PROMPT,
   web: DEFAULT_PROMPT
+};
+
+const PLATFORM_SERVERS: Record<PlatformOption, string> = {
+  android: "http://10.160.24.60:4723",
+  ios: "http://10.160.13.112:4723",
+  web: "http://10.160.24.88:31590"
 };
 
 interface RunTaskFormProps {
@@ -59,8 +66,8 @@ export default function RunTaskForm({
   const [promptOption, setPromptOption] = useState<PromptOption>("default");
   const [customPrompt, setCustomPrompt] = useState("");
   const [tasksJson, setTasksJson] = useState(SAMPLE_TASKS);
-  const [server, setServer] = useState("http://localhost:4723");
-  const [platform, setPlatform] = useState("android");
+  const [platform, setPlatform] = useState<PlatformOption>("android");
+  const [server, setServer] = useState(PLATFORM_SERVERS.android);
   const [reportsFolder, setReportsFolder] = useState("./reports");
   const [debug, setDebug] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -235,22 +242,26 @@ export default function RunTaskForm({
         minRows={8}
       />
       <TextField
-        label="Automation Server"
-        value={server}
-        onChange={(event) => setServer(event.target.value)}
-        fullWidth
-      />
-      <TextField
         select
         label="Platform"
         value={platform}
-        onChange={(event) => setPlatform(event.target.value)}
+        onChange={(event) => {
+          const nextPlatform = event.target.value as PlatformOption;
+          setPlatform(nextPlatform);
+          setServer(PLATFORM_SERVERS[nextPlatform]);
+        }}
         fullWidth
       >
         <MenuItem value="android">Android</MenuItem>
         <MenuItem value="ios">iOS</MenuItem>
         <MenuItem value="web">Web</MenuItem>
       </TextField>
+      <TextField
+        label="Automation Server"
+        value={server}
+        onChange={(event) => setServer(event.target.value)}
+        fullWidth
+      />
       <TextField
         select
         label="LLM Mode"
