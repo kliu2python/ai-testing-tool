@@ -41,7 +41,7 @@ export interface TargetConfiguration {
 export interface RunTaskPayload {
   prompt: string;
   tasks: AutomationTaskDefinition[];
-  server: string;
+  server?: string;
   platform?: string;
   targets?: TargetConfiguration[];
   reports_folder: string;

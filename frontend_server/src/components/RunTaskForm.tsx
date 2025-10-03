@@ -333,9 +333,14 @@ export default function RunTaskForm({
           platform: target.platform
         };
         const serverUrl = target.server.trim();
-        if (serverUrl) {
-          targetConfig.server = serverUrl;
+        if (!serverUrl) {
+          onNotify({
+            message: `Provide an automation server for target "${name}"`,
+            severity: "warning"
+          });
+          return;
         }
+        targetConfig.server = serverUrl;
         if (target.default) {
           targetConfig.default = true;
         }
@@ -343,10 +348,11 @@ export default function RunTaskForm({
       }
     }
 
+    const trimmedServer = server.trim();
+
     const payload: RunTaskPayload = {
       prompt: promptValue,
       tasks: preparedTasks,
-      server,
       reports_folder: reportsFolder,
       debug,
       repeat: repeatCount,
@@ -354,6 +360,14 @@ export default function RunTaskForm({
     };
 
     if (targetForms.length === 0) {
+      if (!trimmedServer) {
+        onNotify({
+          message: "Provide an automation server when no targets are defined",
+          severity: "warning"
+        });
+        return;
+      }
+      payload.server = trimmedServer;
       payload.platform = platform;
     }
 
@@ -600,7 +614,7 @@ export default function RunTaskForm({
                     handleTargetChange(target.id, { server: event.target.value })
                   }
                   fullWidth
-                  helperText="Override the default server or leave as-is to use the suggested endpoint."
+                  helperText="Each target requires its own automation server endpoint."
                 />
                 <FormControlLabel
                   control={
@@ -654,6 +668,12 @@ export default function RunTaskForm({
         value={server}
         onChange={(event) => setServer(event.target.value)}
         fullWidth
+        disabled={targetForms.length > 0}
+        helperText={
+          targetForms.length > 0
+            ? "Automation targets specify their own server endpoints."
+            : "Used when no automation targets are configured."
+        }
       />
       <TextField
         select
