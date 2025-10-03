@@ -15,6 +15,7 @@ services:
     volumes:
       - /home/fortinet/app_db:/data
       - /home/fortinet/app_reports:/app/reports
+      - /home/fortinet/api_logs:/logs
     depends_on:
       - redis
 
@@ -30,6 +31,7 @@ services:
     volumes:
       - /home/fortinet/app_db:/data
       - /home/fortinet/app_reports:/app/reports
+      - /home/fortinet/queue_logs:/logs
     depends_on:
       - redis
 
