@@ -362,8 +362,8 @@ class RunRequest(BaseModel):
     tasks: List[Dict[str, Any]] = Field(
         ..., description="List of task definitions to execute."
     )
-    server: str = Field(
-        "http://localhost:4723",
+    server: Optional[str] = Field(
+        default=None,
         description="Automation server address (e.g., Appium/Selenium).",
     )
     platform: Optional[Platform] = Field(
@@ -399,11 +399,24 @@ class RunRequest(BaseModel):
 
     @root_validator
     def _ensure_platform_or_targets(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        server = values.get("server")
+        if isinstance(server, str):
+            server = server.strip()
+            values["server"] = server or None
+
         platform = values.get("platform")
         targets = values.get("targets")
-        if (not targets or len(targets) == 0) and platform is None:
+
+        has_targets = bool(targets)
+
+        if not has_targets and platform is None:
             raise ValueError(
                 "A platform must be provided when no automation targets are configured"
+            )
+
+        if not has_targets and not values.get("server"):
+            raise ValueError(
+                "An automation server must be provided when no targets are configured"
             )
         return values
 

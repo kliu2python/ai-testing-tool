@@ -575,13 +575,14 @@ def create_driver(_server, _platform="android",
 
 
 def _prepare_target_contexts(
-    server: str,
+    server: Optional[str],
     platform: Optional[str],
     targets: Optional[List[Dict[str, Any]]],
 ) -> Tuple[Dict[str, TargetContext], str]:
     """Create drivers for all requested targets and return them."""
 
     configs: List[Tuple[str, str, str, bool]] = []
+    base_server = (server or "").strip()
 
     if targets:
         for index, raw_cfg in enumerate(targets):
@@ -593,7 +594,8 @@ def _prepare_target_contexts(
                 or f"target{index + 1}"
             )
             target_platform = cfg.get("platform") or platform
-            target_server = cfg.get("server") or server
+            raw_target_server = cfg.get("server")
+            target_server = (raw_target_server or base_server or "").strip()
             if not target_platform:
                 raise ValueError(
                     f"Target '{alias}' is missing a platform configuration"
@@ -609,8 +611,12 @@ def _prepare_target_contexts(
             raise ValueError(
                 "A platform must be provided when no targets are configured"
             )
+        if not base_server:
+            raise ValueError(
+                "An automation server must be provided when no targets are configured"
+            )
         alias = platform or "default"
-        configs.append((alias, server, platform, True))
+        configs.append((alias, base_server, platform, True))
 
     contexts: Dict[str, TargetContext] = {}
     default_alias: Optional[str] = None
@@ -1381,7 +1387,7 @@ def generate_summary_report(reports_folder: str, summary: List[dict]) -> str:
 def _run_tasks(
     prompt: str,
     tasks: List[Dict[str, Any]],
-    server: str,
+    server: Optional[str],
     platform: Optional[str],
     reports_folder: str,
     debug: bool = False,
@@ -1692,7 +1698,7 @@ def _run_tasks(
 def run_tasks(
     prompt: str,
     tasks: List[Dict[str, Any]],
-    server: str,
+    server: Optional[str],
     platform: Optional[str],
     reports_folder: str,
     debug: bool = False,
@@ -1718,7 +1724,7 @@ def run_tasks(
 async def run_tasks_async(
     prompt: str,
     tasks: List[Dict[str, Any]],
-    server: str,
+    server: Optional[str],
     platform: Optional[str],
     reports_folder: str,
     debug: bool = False,

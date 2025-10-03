@@ -48,13 +48,14 @@ export default function TaskEditDialog({
 }: TaskEditDialogProps) {
   const [prompt, setPrompt] = useState("");
   const [tasksJson, setTasksJson] = useState("[]");
-  const [server, setServer] = useState("http://localhost:4723");
+  const [server, setServer] = useState("");
   const [platform, setPlatform] = useState("android");
   const [reportsFolder, setReportsFolder] = useState("./reports");
   const [debug, setDebug] = useState(false);
   const [repeat, setRepeat] = useState(1);
   const [llmMode, setLlmMode] = useState<LlmMode>("auto");
   const [error, setError] = useState<string | null>(null);
+  const [hasTargets, setHasTargets] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -65,6 +66,15 @@ export default function TaskEditDialog({
 
   useEffect(() => {
     if (!initialPayload) {
+      setPrompt("");
+      setTasksJson("[]");
+      setServer("");
+      setPlatform("android");
+      setReportsFolder("./reports");
+      setDebug(false);
+      setRepeat(1);
+      setLlmMode("auto");
+      setHasTargets(false);
       return;
     }
     setPrompt(initialPayload.prompt ?? "");
@@ -74,12 +84,13 @@ export default function TaskEditDialog({
       console.error("Failed to stringify stored tasks", jsonError);
       setTasksJson("[]");
     }
-    setServer(initialPayload.server ?? "http://localhost:4723");
+    setServer(initialPayload.server ?? "");
     setPlatform(initialPayload.platform ?? "android");
     setReportsFolder(initialPayload.reports_folder ?? "./reports");
     setDebug(Boolean(initialPayload.debug));
     setRepeat(Number(initialPayload.repeat) || 1);
     setLlmMode((initialPayload.llm_mode ?? "auto") as LlmMode);
+    setHasTargets(Boolean(initialPayload.targets && initialPayload.targets.length > 0));
   }, [initialPayload]);
 
   const dialogTitle = useMemo(() => {
@@ -103,16 +114,25 @@ export default function TaskEditDialog({
         setError("Repeat count must be a positive number");
         return;
       }
+      const trimmedServer = server.trim();
       const payload: RunTaskPayload = {
         prompt,
         tasks: parsed,
-        server,
-        platform,
         reports_folder: reportsFolder,
         debug,
         repeat,
         llm_mode: llmMode
       };
+
+      if (!hasTargets) {
+        if (!trimmedServer) {
+          setError("Provide an automation server or configure targets.");
+          return;
+        }
+        payload.server = trimmedServer;
+        payload.platform = platform;
+      }
+
       onSubmit(payload);
     } catch (parseError) {
       const message =
@@ -155,6 +175,12 @@ export default function TaskEditDialog({
               value={server}
               onChange={(event) => setServer(event.target.value)}
               fullWidth
+              disabled={hasTargets}
+              helperText={
+                hasTargets
+                  ? "Targets supply their own automation servers."
+                  : "Required when no targets are configured."
+              }
             />
             <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
               <TextField
@@ -163,6 +189,12 @@ export default function TaskEditDialog({
                 value={platform}
                 onChange={(event) => setPlatform(event.target.value)}
                 fullWidth
+                disabled={hasTargets}
+                helperText={
+                  hasTargets
+                    ? "Targets determine the execution platform."
+                    : undefined
+                }
               >
                 {PLATFORM_OPTIONS.map((option) => (
                   <MenuItem key={option.value} value={option.value}>

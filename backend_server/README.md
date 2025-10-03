@@ -63,6 +63,10 @@ curl -X POST "http://<server-ip>:8090/run" \
 The response returns the aggregated summary along with the path to the generated
 `summary.json` report inside the reports directory.
 
+When you define one or more automation targets the runner no longer requires the
+top-level `server` and `platform` fields — each target provides its own
+configuration instead.
+
 ### Coordinating multi-platform flows
 
 When a scenario requires two or more platforms to work together—such as approving
