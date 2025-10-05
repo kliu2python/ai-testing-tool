@@ -457,6 +457,11 @@ def _append_wd_hub(server: str) -> str:
     return urlunparse(parsed._replace(path=new_path))
 
 
+def reopen_app(_driver, app_name: str = "com.fortinet.android.ftm"):
+    _driver.terminate_app(app_name, timeout=3000)
+    _driver.activate_app(app_name)
+
+
 def create_driver(_server, _platform="android",
                   extra_caps: Optional[Dict[str, Any]] = None):
     extra_caps = extra_caps or {}
@@ -477,9 +482,6 @@ def create_driver(_server, _platform="android",
             "locale": "US",
             "appium:newCommandTimeout": 0,
             "appium:uiautomator2ServerLaunchTimeout": 0,
-            # optional: set appPackage/appActivity if you want to auto-launch
-            # "appium:appPackage": "com.fortinet.android.ftm",
-            # "appium:appActivity": "com.fortinet.android.ftm.MainActivity",
             "appium:noReset": True,
             }
         capabilities.update(extra_caps)
@@ -494,7 +496,9 @@ def create_driver(_server, _platform="android",
             )
 
         try:
-            return _connect(server)
+            _driver = _connect(server)
+            reopen_app(_driver)
+            return _driver
         except WebDriverException as exc:
             if _needs_wd_hub_retry(exc):
                 fallback = _append_wd_hub(server)
