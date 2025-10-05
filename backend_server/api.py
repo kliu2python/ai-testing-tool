@@ -20,7 +20,7 @@ import logging
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, EmailStr, Field, ValidationError, root_validator
+from pydantic import BaseModel, EmailStr, Field, ValidationError, model_validator
 from redis.asyncio import Redis
 
 from backend_server.task_queue import (
@@ -397,7 +397,7 @@ class RunRequest(BaseModel):
         description="Preferred model mode: auto-select, text-only, or vision-enabled.",
     )
 
-    @root_validator
+    @model_validator(mode="after")
     def _ensure_platform_or_targets(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         server = values.get("server")
         if isinstance(server, str):
