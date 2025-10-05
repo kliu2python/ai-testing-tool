@@ -6,9 +6,13 @@ import {
   Avatar,
   Box,
   Button,
+  ButtonBase,
   Container,
   CssBaseline,
-  Grid,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  IconButton,
   Menu,
   MenuItem,
   Snackbar,
@@ -35,6 +39,9 @@ import type {
 } from "./types";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import LogoutIcon from "@mui/icons-material/Logout";
+import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
+import CloseIcon from "@mui/icons-material/Close";
+import CircularProgress from "@mui/material/CircularProgress";
 
 interface TabPanelProps {
   value: number;
@@ -78,7 +85,8 @@ export default function App() {
   const [healthStatus, setHealthStatus] = useState<string>("Checking...");
   const [healthOk, setHealthOk] = useState<boolean | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
-  const authPanelRef = useRef<HTMLDivElement | null>(null);
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
+  const [apiConfigOpen, setApiConfigOpen] = useState(false);
   const lastHealthState = useRef<"success" | "error" | null>(null);
   const isMountedRef = useRef(true);
   const userName = useMemo(() => {
@@ -161,13 +169,19 @@ export default function App() {
 
   const handleAuthNavigation = useCallback((mode: "login" | "signup") => {
     setAuthMode(mode);
-    setActiveTab(0);
-    requestAnimationFrame(() => {
-      authPanelRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-      });
-    });
+    setAuthDialogOpen(true);
+  }, []);
+
+  const handleAuthDialogClose = useCallback(() => {
+    setAuthDialogOpen(false);
+  }, []);
+
+  const handleApiConfigOpen = useCallback(() => {
+    setApiConfigOpen(true);
+  }, []);
+
+  const handleApiConfigClose = useCallback(() => {
+    setApiConfigOpen(false);
   }, []);
 
   const handleLogin = useCallback(
@@ -179,6 +193,7 @@ export default function App() {
         JSON.stringify({ token: accessToken, user: account })
       );
       setActiveTab((current) => (current === 0 ? 1 : current));
+      setAuthDialogOpen(false);
     },
     []
   );
@@ -294,23 +309,74 @@ export default function App() {
               </Typography>
             </Box>
             <Box sx={{ flexGrow: 1 }} />
-            <Tooltip title={`API health status: ${healthStatus}`}>
-              <span>
-                <Button
-                  variant="contained"
-                  color={healthOk === false ? "error" : "success"}
-                  onClick={handleManualHealthCheck}
-                  disabled={healthLoading}
-                  sx={{ textTransform: "none", minWidth: 160 }}
-                >
-                  {healthLoading
-                    ? "Checking..."
-                    : healthOk
-                    ? "API Healthy"
-                    : "API Unreachable"}
-                </Button>
-              </span>
-            </Tooltip>
+            <Stack direction="row" spacing={1.5} alignItems="center">
+              <Tooltip
+                title={`API health status: ${healthStatus}. Click to run a manual check.`}
+              >
+                <span>
+                  <ButtonBase
+                    onClick={handleManualHealthCheck}
+                    disabled={healthLoading}
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1,
+                      px: 1.5,
+                      py: 0.5,
+                      borderRadius: 999,
+                      color: "common.white",
+                      opacity: healthLoading ? 0.8 : 1,
+                      transition: "opacity 0.2s ease",
+                      "&:hover .health-indicator-circle": {
+                        transform: "scale(1.1)"
+                      }
+                    }}
+                    aria-label={`API health status: ${healthStatus}`}
+                  >
+                    <Box
+                      className="health-indicator-circle"
+                      sx={{
+                        position: "relative",
+                        width: 18,
+                        height: 18,
+                        borderRadius: "50%",
+                        border: "2px solid rgba(255, 255, 255, 0.85)",
+                        bgcolor:
+                          healthOk === null
+                            ? "warning.main"
+                            : healthOk
+                            ? "success.main"
+                            : "error.main",
+                        transition: "transform 0.2s ease, background-color 0.2s ease",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center"
+                      }}
+                    >
+                      {healthLoading ? (
+                        <CircularProgress
+                          size={14}
+                          thickness={5}
+                          sx={{ color: "common.white" }}
+                        />
+                      ) : null}
+                    </Box>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                      {healthLoading
+                        ? "Checking..."
+                        : healthOk
+                        ? "API Healthy"
+                        : "API Unreachable"}
+                    </Typography>
+                  </ButtonBase>
+                </span>
+              </Tooltip>
+              <Tooltip title="Configure API base URL">
+                <IconButton color="inherit" onClick={handleApiConfigOpen} size="small">
+                  <SettingsOutlinedIcon />
+                </IconButton>
+              </Tooltip>
+            </Stack>
             {user ? (
               <>
                 <Tooltip title={displayEmail}>
@@ -407,31 +473,7 @@ export default function App() {
               <Tab label="Results" disabled={!token} {...tabProps(2)} />
             </Tabs>
             <TabPanel value={activeTab} index={0}>
-              <Grid container spacing={3}>
-                <Grid item xs={12}>
-                  <HomeInstructions />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <ApiConfigPanel
-                    baseUrl={baseUrl}
-                    onBaseUrlChange={setBaseUrl}
-                  />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Box ref={authPanelRef}>
-                    <AuthPanel
-                      baseUrl={baseUrl}
-                      token={token}
-                      user={user}
-                      onLogin={handleLogin}
-                      onLogout={handleLogout}
-                      onNotify={showNotification}
-                      activeMode={authMode}
-                      onModeChange={setAuthMode}
-                    />
-                  </Box>
-                </Grid>
-              </Grid>
+              <HomeInstructions />
             </TabPanel>
             <TabPanel value={activeTab} index={1}>
               <RunTaskForm
@@ -452,6 +494,59 @@ export default function App() {
           </Stack>
         </Container>
       </Box>
+      <Dialog
+        open={apiConfigOpen}
+        onClose={handleApiConfigClose}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ pr: 6 }}>
+          API Configuration
+          <IconButton
+            aria-label="Close API configuration"
+            onClick={handleApiConfigClose}
+            sx={{ position: "absolute", right: 12, top: 12 }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers>
+          <ApiConfigPanel
+            baseUrl={baseUrl}
+            onBaseUrlChange={setBaseUrl}
+            showHeader={false}
+          />
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={authDialogOpen}
+        onClose={handleAuthDialogClose}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ pr: 6 }}>
+          {authMode === "signup" ? "Create an account" : "Sign in"}
+          <IconButton
+            aria-label="Close authentication"
+            onClick={handleAuthDialogClose}
+            sx={{ position: "absolute", right: 12, top: 12 }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ bgcolor: "background.default" }}>
+          <AuthPanel
+            baseUrl={baseUrl}
+            token={token}
+            user={user}
+            onLogin={handleLogin}
+            onLogout={handleLogout}
+            onNotify={showNotification}
+            activeMode={authMode}
+            onModeChange={setAuthMode}
+          />
+        </DialogContent>
+      </Dialog>
       <Snackbar
         open={snackbarOpen}
         autoHideDuration={4000}

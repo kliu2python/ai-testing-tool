@@ -36,17 +36,8 @@ export default function HomeInstructions() {
               <CheckCircleIcon color="success" />
             </ListItemIcon>
             <ListItemText
-              primary="Set your API endpoint"
-              secondary="Use the API Configuration panel to point the portal at the backend environment you want to exercise."
-            />
-          </ListItem>
-          <ListItem>
-            <ListItemIcon>
-              <CheckCircleIcon color="success" />
-            </ListItemIcon>
-            <ListItemText
-              primary="Authenticate"
-              secondary="Sign in or create an account so the system can track your runs and permissions."
+              primary="Verify connectivity"
+              secondary="Use the green health indicator in the header to confirm connectivity and open the gear icon to adjust the API base URL if needed."
             />
           </ListItem>
           <ListItem>
