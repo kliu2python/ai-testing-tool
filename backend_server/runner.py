@@ -1094,11 +1094,77 @@ def _send_keys_safely(el, value: str, platform: str):
     return False
 
 
-def _hide_keyboard_safely(driver, platform: str):
+def _tap_keyboard_button(driver, label: str) -> bool:
+    """Tap a visible keyboard button identified by ``label`` if present."""
+
+    try:
+        element = driver.find_element(AppiumBy.ACCESSIBILITY_ID, label)
+        element.click()
+        return True
+    except NoSuchElementException:
+        pass
+    except Exception:
+        return False
+
+    # Fallback to predicate queries for elements that expose the label but not
+    # an explicit accessibility identifier.
+    try:
+        predicate = f"label == '{label}' AND type == 'XCUIElementTypeButton'"
+        element = driver.find_element(AppiumBy.IOS_PREDICATE, predicate)
+        element.click()
+        return True
+    except NoSuchElementException:
+        return False
+    except Exception:
+        return False
+
+
+def _hide_keyboard_safely(
+    driver, platform: str, *, action: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    """Attempt to dismiss the on-screen keyboard and record fallback taps.
+
+    Returns a list describing additional follow-up actions performed (for
+    example tapping the ``Done`` key) so that run summaries capture the implicit
+    "enter" operation when the agent omitted it.
+    """
+
+    follow_ups: List[Dict[str, Any]] = []
+
     try:
         driver.hide_keyboard()
+        return follow_ups
     except Exception:
         pass
+
+    if platform != "ios":
+        return follow_ups
+
+    operation = ""
+    if isinstance(action, dict):
+        operation = str(action.get("operation", "") or "").strip().lower()
+
+    if operation in {"enter", "return", "done", "submit"}:
+        return follow_ups
+
+    for key_label in ("Done", "Return", "Go"):
+        if _tap_keyboard_button(driver, key_label):
+            follow_ups.append(
+                {
+                    "action": "tap",
+                    "operation": "enter",
+                    "strategy": "accessibility_id",
+                    "selector": key_label,
+                    "explanation": (
+                        "Tap the keyboard's {label} button to confirm text entry "
+                        "when no explicit enter operation was provided."
+                    ).format(label=key_label),
+                    "result": "success",
+                }
+            )
+            break
+
+    return follow_ups
 
 
 # ---- App aliasing & per-task activation ----
@@ -1237,13 +1303,21 @@ def process_next_action(action, driver: webdriver.Remote, folder, step_name):
             driver.tap([(tap_x, tap_y)])
             target = _find_focused_element(driver, platform)
             if target and _send_keys_safely(target, value, platform):
-                _hide_keyboard_safely(driver, platform)
+                follow_ups = _hide_keyboard_safely(driver, platform, action=data)
+                if follow_ups:
+                    data.setdefault("follow_up_actions", []).extend(follow_ups)
                 data["result"] = "success"
             else:
                 if platform == "ios":
                     try:
                         driver.execute_script("mobile: type", {"text": value})
-                        _hide_keyboard_safely(driver, platform)
+                        follow_ups = _hide_keyboard_safely(
+                            driver, platform, action=data
+                        )
+                        if follow_ups:
+                            data.setdefault("follow_up_actions", []).extend(
+                                follow_ups
+                            )
                         data["result"] = "success"
                     except Exception:
                         data["result"] = f"can't find focused element after tapping bounds {bounds}"
@@ -1263,18 +1337,32 @@ def process_next_action(action, driver: webdriver.Remote, folder, step_name):
                 except WebDriverException:
                     pass
                 if _send_keys_safely(field, value, platform):
-                    _hide_keyboard_safely(driver, platform)
+                    follow_ups = _hide_keyboard_safely(driver, platform, action=data)
+                    if follow_ups:
+                        data.setdefault("follow_up_actions", []).extend(follow_ups)
                     data["result"] = "success"
                 else:
                     fresh = _find_focused_element(driver, platform)
                     if fresh and _send_keys_safely(fresh, value, platform):
-                        _hide_keyboard_safely(driver, platform)
+                        follow_ups = _hide_keyboard_safely(
+                            driver, platform, action=data
+                        )
+                        if follow_ups:
+                            data.setdefault("follow_up_actions", []).extend(
+                                follow_ups
+                            )
                         data["result"] = "success"
                     else:
                         if platform == "ios":
                             try:
                                 driver.execute_script("mobile: type", {"text": value})
-                                _hide_keyboard_safely(driver, platform)
+                                follow_ups = _hide_keyboard_safely(
+                                    driver, platform, action=data
+                                )
+                                if follow_ups:
+                                    data.setdefault(
+                                        "follow_up_actions", []
+                                    ).extend(follow_ups)
                                 data["result"] = "success"
                             except Exception:
                                 data["result"] = f"can't find focused element after clicking {xpath}"
