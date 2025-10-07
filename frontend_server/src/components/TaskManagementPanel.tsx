@@ -15,10 +15,12 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  MenuItem,
   TextField,
   Tooltip,
   Typography
 } from "@mui/material";
+import type { SelectChangeEvent } from "@mui/material/Select";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import TaskIcon from "@mui/icons-material/Task";
 import InsightsIcon from "@mui/icons-material/Insights";
@@ -27,6 +29,7 @@ import ReplayIcon from "@mui/icons-material/Replay";
 import EditIcon from "@mui/icons-material/Edit";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import CodeIcon from "@mui/icons-material/Code";
 
 import {
   apiRequest,
@@ -40,7 +43,8 @@ import type {
   StepInfo,
   TaskCollectionResponse,
   TaskStatusResponse,
-  TaskListEntry
+  TaskListEntry,
+  PytestCodegenResponse
 } from "../types";
 import JsonOutput from "./JsonOutput";
 import TaskEditDialog from "./TaskEditDialog";
@@ -51,6 +55,13 @@ interface TaskManagementPanelProps {
   user: AuthenticatedUser | null;
   onNotify: (notification: NotificationState) => void;
   active: boolean;
+}
+
+interface SummaryEntryOption {
+  index: number;
+  label: string;
+  taskName?: string;
+  content: unknown;
 }
 
 function resolveAssetUrl(baseUrl: string, path: string): string {
@@ -70,6 +81,14 @@ export default function TaskManagementPanel({
   const [resultContent, setResultContent] = useState("");
   const [taskId, setTaskId] = useState("");
   const [steps, setSteps] = useState<StepInfo[]>([]);
+  const [resultPayload, setResultPayload] =
+    useState<TaskStatusResponse | null>(null);
+  const [summaryEntries, setSummaryEntries] = useState<SummaryEntryOption[]>([]);
+  const [selectedSummaryIndex, setSelectedSummaryIndex] = useState(0);
+  const [summaryPath, setSummaryPath] = useState<string | null>(null);
+  const [codegenLoading, setCodegenLoading] = useState(false);
+  const [codegenResponse, setCodegenResponse] =
+    useState<PytestCodegenResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [rerunningName, setRerunningName] = useState<string | null>(null);
@@ -83,6 +102,11 @@ export default function TaskManagementPanel({
   const [expandedTasks, setExpandedTasks] = useState<Record<string, boolean>>({});
 
   const assetBase = useMemo(() => baseUrl.replace(/\/$/, ""), [baseUrl]);
+  const selectedSummary = useMemo(
+    () =>
+      summaryEntries.find((entry) => entry.index === selectedSummaryIndex) ?? null,
+    [summaryEntries, selectedSummaryIndex]
+  );
 
   type TaskStatusKey = keyof TaskCollectionResponse;
 
@@ -340,24 +364,114 @@ export default function TaskManagementPanel({
       const message = result.error ?? `Request failed with ${result.status}`;
       onNotify({ message, severity: "error" });
     }
-    const responseData = result.data;
-    const summaryEntries =
-      responseData && Array.isArray(responseData.summary)
-        ? (responseData.summary as unknown[])
-        : [];
-    const lastSummary =
-      summaryEntries.length > 0
-        ? summaryEntries[summaryEntries.length - 1]
-        : null;
-    const content = lastSummary
-      ? formatPayload(lastSummary)
-      : formatPayload(responseData);
-    setResultContent(content);
+    const responseData = result.data ?? null;
+    const entries: SummaryEntryOption[] = [];
+    if (result.ok && responseData && Array.isArray(responseData.summary)) {
+      (responseData.summary as unknown[]).forEach((entry, index) => {
+        const entryObject =
+          entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
+        const entryName =
+          entryObject && typeof entryObject.name === "string"
+            ? entryObject.name
+            : undefined;
+        const label = entryName ? entryName : `Scenario ${index + 1}`;
+        entries.push({
+          index,
+          label,
+          taskName: entryName,
+          content: entry
+        });
+      });
+    }
+    setSummaryEntries(entries);
+    setSummaryPath(result.ok && responseData ? responseData.summary_path ?? null : null);
+    setResultPayload(result.ok && responseData ? responseData : null);
+    setCodegenResponse(null);
+
+    let defaultContent: unknown = responseData;
+    let defaultIndex = 0;
+    if (entries.length > 0) {
+      const selected = entries[entries.length - 1];
+      defaultIndex = selected.index;
+      defaultContent = selected.content;
+    }
+    setSelectedSummaryIndex(defaultIndex);
+    setResultContent(formatPayload(defaultContent));
+
     const responseSteps =
-      result.ok && Array.isArray(result.data?.steps)
-        ? (result.data?.steps as StepInfo[])
+      result.ok && responseData && Array.isArray(responseData.steps)
+        ? (responseData.steps as StepInfo[])
         : [];
     setSteps(responseSteps);
+  }
+
+  function handleSelectedSummaryChange(event: SelectChangeEvent) {
+    const nextIndex = Number(event.target.value);
+    setSelectedSummaryIndex(nextIndex);
+    const entry = summaryEntries.find((item) => item.index === nextIndex);
+    if (entry) {
+      setResultContent(formatPayload(entry.content));
+    } else if (resultPayload) {
+      setResultContent(formatPayload(resultPayload));
+    } else {
+      setResultContent("");
+    }
+    setCodegenResponse(null);
+  }
+
+  async function generatePytestCode() {
+    if (summaryEntries.length === 0) {
+      onNotify({
+        message: "Load a task result that contains summary data before generating code",
+        severity: "warning"
+      });
+      return;
+    }
+    const authToken = requireToken();
+    if (!authToken) {
+      return;
+    }
+
+    const payload: Record<string, unknown> = {
+      task_index: selectedSummaryIndex
+    };
+    if (selectedSummary?.taskName) {
+      payload.task_name = selectedSummary.taskName;
+    }
+
+    if (summaryPath) {
+      payload.summary_path = summaryPath;
+    } else if (resultPayload?.summary) {
+      payload.summary = {
+        summary: resultPayload.summary,
+        summary_path: resultPayload.summary_path ?? undefined
+      } as Record<string, unknown>;
+    } else {
+      onNotify({
+        message: "Summary details are unavailable for code generation",
+        severity: "error"
+      });
+      return;
+    }
+
+    setCodegenLoading(true);
+    setCodegenResponse(null);
+    const response = await apiRequest<PytestCodegenResponse>(
+      baseUrl,
+      "post",
+      "/codegen/pytest",
+      payload,
+      authToken
+    );
+    setCodegenLoading(false);
+
+    if (response.ok && response.data) {
+      setCodegenResponse(response.data);
+      onNotify({ message: "Pytest code generated", severity: "success" });
+    } else {
+      const message = response.error ?? `Request failed with ${response.status}`;
+      onNotify({ message, severity: "error" });
+    }
   }
 
   async function deleteTask(targetId?: string) {
@@ -766,6 +880,67 @@ export default function TaskManagementPanel({
       </Stack>
       <JsonOutput title="Status" content={statusContent} />
       <JsonOutput title="Result" content={resultContent} />
+      {summaryEntries.length > 0 ? (
+        <Stack spacing={2}>
+          <Typography variant="h6">Generate Pytest Code</Typography>
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={2}
+            alignItems={{ xs: "stretch", sm: "flex-end" }}
+          >
+            <TextField
+              select
+              label="Scenario"
+              value={selectedSummaryIndex}
+              onChange={handleSelectedSummaryChange}
+              sx={{ minWidth: { xs: "100%", sm: 240 } }}
+            >
+              {summaryEntries.map((entry) => (
+                <MenuItem key={entry.index} value={entry.index}>
+                  {entry.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            <Button
+              variant="contained"
+              startIcon={<CodeIcon />}
+              disabled={disableActions || codegenLoading}
+              onClick={() => {
+                void generatePytestCode();
+              }}
+            >
+              {codegenLoading ? "Generating..." : "Generate Pytest Code"}
+            </Button>
+          </Stack>
+          {codegenResponse ? (
+            <Stack spacing={0.5}>
+              <Typography variant="body2" color="text.secondary">
+                Model: {codegenResponse.model}
+              </Typography>
+              {codegenResponse.function_name ? (
+                <Typography variant="body2" color="text.secondary">
+                  Test Function: {codegenResponse.function_name}
+                </Typography>
+              ) : null}
+            </Stack>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              Use the generator to convert the selected summary into executable
+              pytest code.
+            </Typography>
+          )}
+          <JsonOutput
+            title="Generated Pytest Code"
+            content={codegenResponse?.code ?? ""}
+            minHeight={320}
+          />
+        </Stack>
+      ) : resultPayload ? (
+        <Typography variant="body2" color="text.secondary">
+          The retrieved result does not include summary data required for code
+          generation.
+        </Typography>
+      ) : null}
       <Divider />
       <Stack spacing={2}>
         <Typography variant="h6">Execution Steps</Typography>

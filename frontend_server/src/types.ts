@@ -89,3 +89,21 @@ export interface RunResponse {
   task_id: string;
   task_ids: string[];
 }
+
+export interface PytestCodegenRequest {
+  summary?: Record<string, unknown>;
+  summary_path?: string;
+  task_name?: string;
+  task_index?: number;
+  model?: string;
+  temperature?: number;
+  max_output_tokens?: number;
+}
+
+export interface PytestCodegenResponse {
+  code: string;
+  model: string;
+  task_name?: string | null;
+  task_index: number;
+  function_name?: string | null;
+}
