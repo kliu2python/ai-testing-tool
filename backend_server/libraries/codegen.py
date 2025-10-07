@@ -77,13 +77,19 @@ def _load_summary_from_path(summary_path: str) -> Dict[str, Any]:
 
 
 def _select_summary_task(
-    payload: Dict[str, Any],
+    payload: Any,
     task_name: Optional[str],
     task_index: int,
 ) -> Dict[str, Any]:
     """Return the selected task entry from ``payload``."""
 
-    tasks = payload.get("summary")
+    if isinstance(payload, dict):
+        tasks = payload.get("summary")
+    elif isinstance(payload, Iterable):
+        tasks = payload
+    else:  # pragma: no cover - defensive guard
+        raise CodegenError("Summary payload is neither an object nor a list")
+
     if not isinstance(tasks, Iterable):
         raise CodegenError("Summary payload does not contain a 'summary' list")
 
@@ -163,7 +169,7 @@ def _build_messages(
 
 
 def generate_pytest_from_summary(
-    summary: Dict[str, Any],
+    summary: Any,
     *,
     task_name: Optional[str] = None,
     task_index: int = 0,
@@ -173,16 +179,27 @@ def generate_pytest_from_summary(
 ) -> CodegenResult:
     """Generate pytest automation code from a run ``summary``."""
 
-    task_entry = _select_summary_task(summary, task_name, task_index)
+    if isinstance(summary, list):
+        summary_payload: Dict[str, Any] = {"summary": summary}
+    elif isinstance(summary, dict):
+        summary_payload = summary
+    else:
+        raise CodegenError("Summary data must be an object or list of tasks")
+
+    task_entry = _select_summary_task(summary_payload, task_name, task_index)
 
     function_name = f"test_{_slugify(task_entry.get('name', 'scenario'))}"
-    metadata = {
-        key: value
-        for key, value in summary.items()
-        if key not in {"summary", "summary_path"}
-    }
-    metadata["reports_path"] = task_entry.get("reports_path") or summary.get(
-        "summary_path"
+    metadata = (
+        {
+            key: value
+            for key, value in summary_payload.items()
+            if key not in {"summary", "summary_path"}
+        }
+        if isinstance(summary_payload, dict)
+        else {}
+    )
+    metadata["reports_path"] = task_entry.get("reports_path") or (
+        summary_payload.get("summary_path") if isinstance(summary_payload, dict) else None
     )
 
     messages = _build_messages(task_entry, metadata=metadata, function_name=function_name)
