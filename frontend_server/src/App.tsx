@@ -32,6 +32,7 @@ import ApiConfigPanel from "./components/ApiConfigPanel";
 import HomeInstructions from "./components/HomeInstructions";
 import RunTaskForm from "./components/RunTaskForm";
 import TaskManagementPanel from "./components/TaskManagementPanel";
+import CodeLibraryPanel from "./components/CodeLibraryPanel";
 import theme from "./theme";
 import type {
   AuthenticatedUser,
@@ -471,6 +472,7 @@ export default function App() {
               <Tab label="Home" {...tabProps(0)} />
               <Tab label="Run Tasks" disabled={!token} {...tabProps(1)} />
               <Tab label="Results" disabled={!token} {...tabProps(2)} />
+              <Tab label="Code Library" disabled={!token} {...tabProps(3)} />
             </Tabs>
             <TabPanel value={activeTab} index={0}>
               <HomeInstructions />
@@ -489,6 +491,14 @@ export default function App() {
                 user={user}
                 onNotify={showNotification}
                 active={activeTab === 2}
+              />
+            </TabPanel>
+            <TabPanel value={activeTab} index={3}>
+              <CodeLibraryPanel
+                baseUrl={baseUrl}
+                token={token}
+                onNotify={showNotification}
+                active={activeTab === 3}
               />
             </TabPanel>
           </Stack>
