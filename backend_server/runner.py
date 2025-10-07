@@ -514,10 +514,9 @@ def create_driver(_server, _platform="android",
             "platformName": "iOS",
             "appium:deviceName": "iPhone8-ios16",
             "appium:udid": "f67d7ce40691d9ab546d7362a4cc7a6182870de2",
-            "appium:autoLaunch": False,
-            "appium:noReset": True,
-            "appium:wdaLocalPort": "8101",
-            }
+            "appium:bundleId": "FortiToken-Mobile",
+            "appium:wdaLocalPort": "8101"
+        }
         capabilities.update(extra_caps)
         assert server is not None
         options = XCUITestOptions().load_capabilities(capabilities)

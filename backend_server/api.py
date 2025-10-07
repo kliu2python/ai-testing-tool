@@ -399,13 +399,13 @@ class RunRequest(BaseModel):
 
     @model_validator(mode="after")
     def _ensure_platform_or_targets(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        server = values.get("server")
+        server = values.server
         if isinstance(server, str):
             server = server.strip()
-            values["server"] = server or None
+            values.server = server or None
 
-        platform = values.get("platform")
-        targets = values.get("targets")
+        platform = values.platform
+        targets = values.targets
 
         has_targets = bool(targets)
 
@@ -414,7 +414,7 @@ class RunRequest(BaseModel):
                 "A platform must be provided when no automation targets are configured"
             )
 
-        if not has_targets and not values.get("server"):
+        if not has_targets and not values.server:
             raise ValueError(
                 "An automation server must be provided when no targets are configured"
             )
