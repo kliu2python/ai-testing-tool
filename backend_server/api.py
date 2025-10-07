@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
 import json
@@ -23,6 +24,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field, ValidationError, model_validator
 from redis.asyncio import Redis
 
+from backend_server.libraries.codegen import (
+    CodegenError,
+    async_generate_pytest_from_path,
+    generate_pytest_from_summary,
+)
 from backend_server.task_queue import (
     create_async_redis_client,
     dump_status,
@@ -428,6 +434,65 @@ class RunResponse(BaseModel):
     task_ids: List[str]
 
 
+class PytestCodegenRequest(BaseModel):
+    """Payload for requesting pytest code generation from a summary."""
+
+    summary: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Automation summary payload mirroring the stored summary.json file.",
+    )
+    summary_path: Optional[str] = Field(
+        default=None,
+        description="Filesystem path to an existing summary.json file.",
+    )
+    task_name: Optional[str] = Field(
+        default=None,
+        description="Name of the scenario to convert. Takes precedence over task_index.",
+    )
+    task_index: int = Field(
+        default=0,
+        ge=0,
+        description="Zero-based index of the scenario entry within the summary list.",
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description="Override the OpenAI model used for code generation.",
+    )
+    temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature applied to the LLM request.",
+    )
+    max_output_tokens: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=8192,
+        description="Optional upper bound for generated tokens.",
+    )
+
+    @model_validator(mode="after")
+    def _ensure_source(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        summary = values.get("summary")
+        summary_path = values.get("summary_path")
+
+        if summary and summary_path:
+            raise ValueError("Provide either 'summary' or 'summary_path', not both")
+        if not summary and not summary_path:
+            raise ValueError("Either 'summary' or 'summary_path' must be supplied")
+        return values
+
+
+class PytestCodegenResponse(BaseModel):
+    """Result returned after generating pytest automation code."""
+
+    code: str
+    model: str
+    task_name: Optional[str] = None
+    task_index: int
+    function_name: Optional[str] = None
+
+
 class TaskStatus(str, Enum):
     """Possible lifecycle states for a queued task."""
 
@@ -661,6 +726,81 @@ async def run_automation(
         task_ids.append(task_id)
 
     return RunResponse(task_id=task_ids[0], task_ids=task_ids)
+
+
+@app.post(
+    "/codegen/pytest",
+    response_model=PytestCodegenResponse,
+    summary="Generate pytest automation code from a run summary",
+)
+async def generate_pytest_code(
+    request: PytestCodegenRequest, current_user: User = Depends(get_current_user)
+) -> PytestCodegenResponse:
+    """Convert an automation run summary into an executable pytest module."""
+
+    del current_user  # Authentication is enforced via dependency injection.
+
+    if request.summary_path:
+        try:
+            result = await async_generate_pytest_from_path(
+                request.summary_path,
+                task_name=request.task_name,
+                task_index=request.task_index,
+                model=request.model,
+                temperature=request.temperature,
+                max_output_tokens=request.max_output_tokens,
+            )
+        except CodegenError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:  # pragma: no cover - operational failure
+            logger.exception(
+                "Failed to generate pytest code from summary '%s': %s",
+                request.summary_path,
+                exc,
+            )
+            raise HTTPException(
+                status_code=503, detail="Failed to generate pytest code"
+            ) from exc
+        task_name = result.task_name or request.task_name
+    else:
+        summary_payload = request.summary or {}
+        try:
+            result = await asyncio.to_thread(
+                generate_pytest_from_summary,
+                summary_payload,
+                task_name=request.task_name,
+                task_index=request.task_index,
+                model=request.model,
+                temperature=request.temperature,
+                max_output_tokens=request.max_output_tokens,
+            )
+        except CodegenError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:  # pragma: no cover - operational failure
+            logger.exception("Failed to generate pytest code: %s", exc)
+            raise HTTPException(
+                status_code=503, detail="Failed to generate pytest code"
+            ) from exc
+
+        task_name = result.task_name or request.task_name
+        if not task_name:
+            summary_list = summary_payload.get("summary") if isinstance(
+                summary_payload, dict
+            ) else None
+            if (
+                isinstance(summary_list, list)
+                and 0 <= request.task_index < len(summary_list)
+                and isinstance(summary_list[request.task_index], dict)
+            ):
+                task_name = summary_list[request.task_index].get("name")
+
+    return PytestCodegenResponse(
+        code=result.code,
+        model=result.model,
+        task_name=task_name,
+        task_index=request.task_index,
+        function_name=result.function_name,
+    )
 
 
 async def _fetch_task_status(
