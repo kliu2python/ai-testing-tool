@@ -473,8 +473,8 @@ class PytestCodegenRequest(BaseModel):
 
     @model_validator(mode="after")
     def _ensure_source(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        summary = values.get("summary")
-        summary_path = values.get("summary_path")
+        summary = values.summary
+        summary_path = values.summary_path
 
         if summary and summary_path:
             raise ValueError("Provide either 'summary' or 'summary_path', not both")
