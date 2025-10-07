@@ -101,9 +101,36 @@ export interface PytestCodegenRequest {
 }
 
 export interface PytestCodegenResponse {
+  record_id: number;
   code: string;
   model: string;
   task_name?: string | null;
   task_index: number;
   function_name?: string | null;
+}
+
+export interface CodegenRecordSummary {
+  id: number;
+  task_name?: string | null;
+  task_index: number;
+  model?: string | null;
+  function_name?: string | null;
+  summary_path?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CodegenRecordDetail extends CodegenRecordSummary {
+  code: string;
+  summary_json?: Record<string, unknown> | null;
+}
+
+export interface PytestExecutionResponse {
+  record_id: number;
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  started_at: string;
+  finished_at: string;
+  duration_seconds: number;
 }

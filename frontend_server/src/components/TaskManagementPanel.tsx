@@ -467,7 +467,11 @@ export default function TaskManagementPanel({
 
     if (response.ok && response.data) {
       setCodegenResponse(response.data);
-      onNotify({ message: "Pytest code generated", severity: "success" });
+      const entryId = response.data.record_id;
+      const message = Number.isFinite(entryId)
+        ? `Pytest code generated (entry #${entryId})`
+        : "Pytest code generated";
+      onNotify({ message, severity: "success" });
     } else {
       const message = response.error ?? `Request failed with ${response.status}`;
       onNotify({ message, severity: "error" });
@@ -914,6 +918,11 @@ export default function TaskManagementPanel({
           </Stack>
           {codegenResponse ? (
             <Stack spacing={0.5}>
+              {Number.isFinite(codegenResponse.record_id) ? (
+                <Typography variant="body2" color="text.secondary">
+                  Entry ID: {codegenResponse.record_id}
+                </Typography>
+              ) : null}
               <Typography variant="body2" color="text.secondary">
                 Model: {codegenResponse.model}
               </Typography>

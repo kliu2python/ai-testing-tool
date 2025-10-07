@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from asyncio.subprocess import PIPE
 import datetime as dt
 import hashlib
 import json
@@ -10,6 +11,8 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
+import tempfile
 import uuid
 from dataclasses import dataclass
 from enum import Enum
@@ -39,16 +42,26 @@ from backend_server.task_queue import (
 from backend_server.task_store import (
     delete_task_run,
     ensure_task_tables,
+    list_codegen_results,
     list_task_runs_for_user,
+    load_codegen_result,
     load_latest_task_request,
     load_task_metadata,
     load_task_run,
     register_task_run,
     set_task_status,
+    store_codegen_result,
     update_task_request,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _decode_stream(payload: bytes) -> str:
+    """Decode ``payload`` into UTF-8 text with replacement handling."""
+
+    return payload.decode("utf-8", errors="replace")
+
 
 # -----------------------------
 # Database & Auth helpers
@@ -486,11 +499,44 @@ class PytestCodegenRequest(BaseModel):
 class PytestCodegenResponse(BaseModel):
     """Result returned after generating pytest automation code."""
 
+    record_id: int
     code: str
     model: str
     task_name: Optional[str] = None
     task_index: int
     function_name: Optional[str] = None
+
+
+class CodegenRecordSummary(BaseModel):
+    """Metadata describing a stored code generation result."""
+
+    id: int
+    task_name: Optional[str] = None
+    task_index: int
+    model: Optional[str] = None
+    function_name: Optional[str] = None
+    summary_path: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class CodegenRecordDetail(CodegenRecordSummary):
+    """Detailed payload for a stored code generation result."""
+
+    code: str
+    summary_json: Optional[Dict[str, Any]] = None
+
+
+class PytestExecutionResponse(BaseModel):
+    """Payload returned after executing a stored pytest module."""
+
+    record_id: int
+    exit_code: int
+    stdout: str
+    stderr: str
+    started_at: str
+    finished_at: str
+    duration_seconds: float
 
 
 class TaskStatus(str, Enum):
@@ -738,7 +784,8 @@ async def generate_pytest_code(
 ) -> PytestCodegenResponse:
     """Convert an automation run summary into an executable pytest module."""
 
-    del current_user  # Authentication is enforced via dependency injection.
+    summary_snapshot: Optional[Dict[str, Any]] = None
+    summary_source_path: Optional[str] = request.summary_path
 
     if request.summary_path:
         try:
@@ -764,6 +811,12 @@ async def generate_pytest_code(
         task_name = result.task_name or request.task_name
     else:
         summary_payload = request.summary or {}
+        if request.summary is not None:
+            summary_snapshot = request.summary
+        if isinstance(summary_payload, dict) and summary_source_path is None:
+            summary_value = summary_payload.get("summary_path")
+            if isinstance(summary_value, str):
+                summary_source_path = summary_value
         try:
             result = await asyncio.to_thread(
                 generate_pytest_from_summary,
@@ -794,12 +847,169 @@ async def generate_pytest_code(
             ):
                 task_name = summary_list[request.task_index].get("name")
 
+    try:
+        record_id = store_codegen_result(
+            current_user.id,
+            task_name=task_name,
+            task_index=request.task_index,
+            model=result.model,
+            code=result.code,
+            function_name=result.function_name,
+            summary_path=summary_source_path,
+            summary_json=summary_snapshot,
+        )
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        logger.exception("Failed to persist generated pytest code: %s", exc)
+        raise HTTPException(
+            status_code=503, detail="Failed to store generated code"
+        ) from exc
+
     return PytestCodegenResponse(
+        record_id=record_id,
         code=result.code,
         model=result.model,
         task_name=task_name,
         task_index=request.task_index,
         function_name=result.function_name,
+    )
+
+
+@app.get(
+    "/codegen/pytest",
+    response_model=List[CodegenRecordSummary],
+    summary="List stored pytest code generation results",
+)
+async def list_codegen_history(
+    current_user: User = Depends(get_current_user),
+) -> List[CodegenRecordSummary]:
+    """Return all stored code generation results visible to the user."""
+
+    owner_filter = None if current_user.is_admin else current_user.id
+    try:
+        records = list_codegen_results(owner_filter)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        logger.exception("Failed to list stored code: %s", exc)
+        raise HTTPException(
+            status_code=503, detail="Failed to load stored code"
+        ) from exc
+
+    return [
+        CodegenRecordSummary(
+            id=record["id"],
+            task_name=record.get("task_name"),
+            task_index=record.get("task_index", 0),
+            model=record.get("model"),
+            function_name=record.get("function_name"),
+            summary_path=record.get("summary_path"),
+            created_at=record.get("created_at"),
+            updated_at=record.get("updated_at"),
+        )
+        for record in records
+    ]
+
+
+@app.get(
+    "/codegen/pytest/{record_id}",
+    response_model=CodegenRecordDetail,
+    summary="Retrieve a stored pytest code generation result",
+)
+async def get_codegen_history_entry(
+    record_id: int, current_user: User = Depends(get_current_user)
+) -> CodegenRecordDetail:
+    """Return the stored code for ``record_id`` if permitted."""
+
+    try:
+        record = load_codegen_result(record_id)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        logger.exception("Failed to load stored code %s: %s", record_id, exc)
+        raise HTTPException(
+            status_code=503, detail="Failed to load stored code"
+        ) from exc
+
+    if record is None:
+        raise HTTPException(status_code=404, detail="Generated code not found")
+
+    if not current_user.is_admin and record.get("user_id") != current_user.id:
+        raise HTTPException(status_code=403, detail="Generated code is not accessible")
+
+    return CodegenRecordDetail(
+        id=record["id"],
+        task_name=record.get("task_name"),
+        task_index=record.get("task_index", 0),
+        model=record.get("model"),
+        function_name=record.get("function_name"),
+        summary_path=record.get("summary_path"),
+        created_at=record.get("created_at"),
+        updated_at=record.get("updated_at"),
+        code=record.get("code", ""),
+        summary_json=record.get("summary_json"),
+    )
+
+
+@app.post(
+    "/codegen/pytest/{record_id}/execute",
+    response_model=PytestExecutionResponse,
+    summary="Execute a stored pytest module",
+)
+async def execute_codegen_history_entry(
+    record_id: int, current_user: User = Depends(get_current_user)
+) -> PytestExecutionResponse:
+    """Run the stored pytest module identified by ``record_id``."""
+
+    try:
+        record = load_codegen_result(record_id)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        logger.exception("Failed to load stored code %s: %s", record_id, exc)
+        raise HTTPException(
+            status_code=503, detail="Failed to load stored code"
+        ) from exc
+
+    if record is None:
+        raise HTTPException(status_code=404, detail="Generated code not found")
+
+    if not current_user.is_admin and record.get("user_id") != current_user.id:
+        raise HTTPException(status_code=403, detail="Generated code is not accessible")
+
+    code = record.get("code")
+    if not isinstance(code, str) or not code.strip():
+        raise HTTPException(status_code=400, detail="Stored code is empty")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            module_path = Path(tmpdir) / "test_generated.py"
+            module_path.write_text(code, encoding="utf-8")
+            started_at = dt.datetime.utcnow()
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "pytest",
+                str(module_path),
+                stdout=PIPE,
+                stderr=PIPE,
+                cwd=tmpdir,
+            )
+            stdout_bytes, stderr_bytes = await process.communicate()
+            finished_at = dt.datetime.utcnow()
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=503, detail=f"Failed to execute pytest: {exc}"
+        ) from exc
+    except Exception as exc:  # pragma: no cover - operational failure
+        logger.exception("Failed to execute stored pytest module %s: %s", record_id, exc)
+        raise HTTPException(
+            status_code=503, detail="Failed to execute generated code"
+        ) from exc
+
+    duration = max((finished_at - started_at).total_seconds(), 0.0)
+
+    return PytestExecutionResponse(
+        record_id=record_id,
+        exit_code=process.returncode or 0,
+        stdout=_decode_stream(stdout_bytes),
+        stderr=_decode_stream(stderr_bytes),
+        started_at=started_at.isoformat(),
+        finished_at=finished_at.isoformat(),
+        duration_seconds=duration,
     )
 
 

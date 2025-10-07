@@ -68,6 +68,24 @@ def ensure_task_tables(conn: sqlite3.Connection) -> None:
     )
 
     _ensure_column(conn, "task_runs", "request_json", "TEXT")
+    conn.executescript(
+        """
+    CREATE TABLE IF NOT EXISTS codegen_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        task_name TEXT,
+        task_index INTEGER NOT NULL DEFAULT 0,
+        model TEXT,
+        code TEXT NOT NULL,
+        function_name TEXT,
+        summary_path TEXT,
+        summary_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    """
+    )
 
 
 def _normalise_path(path: str) -> str:
@@ -436,6 +454,141 @@ def list_task_runs_for_user(user_id: Optional[str]) -> Iterable[Dict[str, Any]]:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }
+    finally:
+        conn.close()
+
+
+def store_codegen_result(
+    user_id: str,
+    *,
+    task_name: Optional[str],
+    task_index: int,
+    model: Optional[str],
+    code: str,
+    function_name: Optional[str],
+    summary_path: Optional[str] = None,
+    summary_json: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Persist a generated code snippet and return its identifier."""
+
+    now = dt.datetime.utcnow().isoformat()
+    summary_path_norm = _normalise_path(summary_path) if summary_path else None
+    summary_json_text = json.dumps(summary_json) if summary_json is not None else None
+
+    conn = _connect()
+    try:
+        ensure_task_tables(conn)
+        cursor = conn.execute(
+            """
+            INSERT INTO codegen_history (
+                user_id, task_name, task_index, model, code, function_name,
+                summary_path, summary_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                task_name,
+                task_index,
+                model,
+                code,
+                function_name,
+                summary_path_norm,
+                summary_json_text,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+    finally:
+        conn.close()
+
+
+def list_codegen_results(user_id: Optional[str]) -> List[Dict[str, Any]]:
+    """Return stored code generation entries for ``user_id``."""
+
+    conn = _connect()
+    try:
+        ensure_task_tables(conn)
+        if user_id is None:
+            cursor = conn.execute(
+                """
+                SELECT id, user_id, task_name, task_index, model, function_name,
+                       summary_path, created_at, updated_at
+                  FROM codegen_history
+              ORDER BY updated_at DESC
+                """
+            )
+        else:
+            cursor = conn.execute(
+                """
+                SELECT id, user_id, task_name, task_index, model, function_name,
+                       summary_path, created_at, updated_at
+                  FROM codegen_history
+                 WHERE user_id = ?
+              ORDER BY updated_at DESC
+                """,
+                (user_id,),
+            )
+
+        results: List[Dict[str, Any]] = []
+        for row in cursor:
+            results.append(
+                {
+                    "id": int(row["id"]),
+                    "user_id": row["user_id"],
+                    "task_name": row["task_name"],
+                    "task_index": row["task_index"],
+                    "model": row["model"],
+                    "function_name": row["function_name"],
+                    "summary_path": row["summary_path"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+        return results
+    finally:
+        conn.close()
+
+
+def load_codegen_result(record_id: int) -> Optional[Dict[str, Any]]:
+    """Return the stored code generation record identified by ``record_id``."""
+
+    conn = _connect()
+    try:
+        ensure_task_tables(conn)
+        cursor = conn.execute(
+            """
+            SELECT id, user_id, task_name, task_index, model, code, function_name,
+                   summary_path, summary_json, created_at, updated_at
+              FROM codegen_history
+             WHERE id = ?
+            """,
+            (record_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        summary_json = (
+            json.loads(row["summary_json"])
+            if row["summary_json"]
+            else None
+        )
+        return {
+            "id": int(row["id"]),
+            "user_id": row["user_id"],
+            "task_name": row["task_name"],
+            "task_index": row["task_index"],
+            "model": row["model"],
+            "code": row["code"],
+            "function_name": row["function_name"],
+            "summary_path": row["summary_path"],
+            "summary_json": summary_json,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
     finally:
         conn.close()
 
