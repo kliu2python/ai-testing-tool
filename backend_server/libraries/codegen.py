@@ -11,8 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
+from dotenv import load_dotenv
 from openai import OpenAI
 
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 
