@@ -259,15 +259,15 @@ def _describe_screenshot_with_vision_model(screenshot_path: str) -> Optional[str
         client_kwargs["base_url"] = base_url
 
     system_prompt = (
-        "You are an assistant that describes application screenshots for automated testing. "
-        "Identify interactive controls, text labels, alerts, and any relevant UI layout details."
+        "You are an assistant that directly inspects application screenshots for automated testing. "
+        "Describe visible elements with emphasis on colours, relative size or layout, the language of any text, and whether overlays, modals, or dialogs are present."
     )
     user_message = [
         {
             "type": "text",
             "text": (
                 "Provide a concise yet thorough description of the visible screen. "
-                "Highlight key UI elements, their labels, and any state that might influence the next action."
+                "Highlight key UI elements, their labels, colour accents, sizing cues, and any overlay or layered interface state that might influence the next action."
             ),
         },
         {"type": "image_url", "image_url": {"url": data_url}},
@@ -309,15 +309,6 @@ def generate_next_action(
         screen_description = _describe_screenshot_with_vision_model(screenshot_path)
         logger.info(f"The screen description is {screen_description}")
 
-    screenshot_base64: Optional[str] = None
-    if screenshot_path:
-        screenshot_base64 = image_to_base64(screenshot_path)
-        if not screenshot_base64:
-            logger.debug(
-                "Screenshot '%s' could not be encoded for next action generation",
-                screenshot_path,
-            )
-
     messages: List[Any] = []
     messages.append({"role": "system", "content": _prompt})
 
@@ -326,16 +317,6 @@ def generate_next_action(
         {"type": "text", "text": f"# History of Actions \n {history_actions_str}"},
         {"type": "text", "text": f"# Source of Page \n ```yaml\n {page_source} \n```"},
     ]
-
-    if screenshot_base64:
-        user_content.append(
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{screenshot_base64}"
-                },
-            }
-        )
 
     if screen_description:
         user_content.append(
