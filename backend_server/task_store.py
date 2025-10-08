@@ -7,7 +7,11 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, TYPE_CHECKING
+
+
+if TYPE_CHECKING:  # pragma: no cover - circular typing guard
+    from backend_server.example_bootstrap import Example
 
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -100,6 +104,38 @@ def ensure_task_tables(conn: sqlite3.Connection) -> None:
         "codegen_history",
         "failure_count",
         "INTEGER NOT NULL DEFAULT 0",
+    )
+
+
+def ensure_example_tables(conn: sqlite3.Connection) -> None:
+    """Create example storage tables when absent."""
+
+    conn.executescript(
+        """
+    CREATE TABLE IF NOT EXISTS code_examples (
+        example_id TEXT PRIMARY KEY,
+        task_hash TEXT NOT NULL,
+        language TEXT NOT NULL,
+        framework TEXT,
+        code TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        metrics_json TEXT NOT NULL,
+        score REAL NOT NULL,
+        created_at TEXT NOT NULL,
+        tags_json TEXT,
+        embedding_json TEXT,
+        code_hash TEXT NOT NULL UNIQUE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_code_examples_language
+        ON code_examples(language);
+
+    CREATE INDEX IF NOT EXISTS idx_code_examples_framework
+        ON code_examples(framework);
+
+    CREATE INDEX IF NOT EXISTS idx_code_examples_task_hash
+        ON code_examples(task_hash);
+    """
     )
 
 
@@ -570,6 +606,118 @@ def list_codegen_results(user_id: Optional[str]) -> List[Dict[str, Any]]:
                 }
             )
         return results
+    finally:
+        conn.close()
+
+
+def store_code_example(example: "Example", *, code_hash: str) -> None:
+    """Persist ``example`` in the datastore if not already present."""
+
+    conn = _connect()
+    try:
+        ensure_example_tables(conn)
+        cursor = conn.execute(
+            "SELECT example_id FROM code_examples WHERE code_hash = ?",
+            (code_hash,),
+        )
+        row = cursor.fetchone()
+        payload = (
+            example.task_hash,
+            example.language,
+            example.framework,
+            example.code,
+            example.summary,
+            json.dumps(example.metrics or {}),
+            float(example.score),
+            example.created_at.isoformat(),
+            json.dumps(example.tags or []),
+            json.dumps(example.embedding) if example.embedding is not None else None,
+        )
+        if row:
+            existing_id = row["example_id"]
+            conn.execute(
+                """
+                UPDATE code_examples
+                   SET task_hash = ?,
+                       language = ?,
+                       framework = ?,
+                       code = ?,
+                       summary = ?,
+                       metrics_json = ?,
+                       score = ?,
+                       created_at = ?,
+                       tags_json = ?,
+                       embedding_json = ?
+                 WHERE example_id = ?
+                """,
+                (*payload, existing_id),
+            )
+            example.example_id = existing_id
+        else:
+            conn.execute(
+                """
+                INSERT INTO code_examples (
+                    example_id, task_hash, language, framework, code, summary,
+                    metrics_json, score, created_at, tags_json, embedding_json, code_hash
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    example.example_id,
+                    *payload,
+                    code_hash,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_code_examples(
+    language: str, framework: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Return stored examples for ``language`` and ``framework``."""
+
+    conn = _connect()
+    try:
+        ensure_example_tables(conn)
+        params: List[Any] = [language]
+        query = (
+            """
+            SELECT example_id, task_hash, language, framework, code, summary,
+                   metrics_json, score, created_at, tags_json, embedding_json
+              FROM code_examples
+             WHERE language = ?
+            """
+        )
+        if framework:
+            query += " AND (framework IS NULL OR framework = ?)"
+            params.append(framework)
+
+        cursor = conn.execute(query, params)
+        records: List[Dict[str, Any]] = []
+        for row in cursor:
+            metrics = json.loads(row["metrics_json"]) if row["metrics_json"] else {}
+            tags = json.loads(row["tags_json"]) if row["tags_json"] else []
+            embedding = (
+                json.loads(row["embedding_json"]) if row["embedding_json"] else None
+            )
+            records.append(
+                {
+                    "example_id": row["example_id"],
+                    "task_hash": row["task_hash"],
+                    "language": row["language"],
+                    "framework": row["framework"],
+                    "code": row["code"],
+                    "summary": row["summary"],
+                    "metrics": metrics,
+                    "score": row["score"],
+                    "created_at": row["created_at"],
+                    "tags": tags,
+                    "embedding": embedding,
+                }
+            )
+        return records
     finally:
         conn.close()
 
