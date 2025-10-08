@@ -78,6 +78,112 @@ def _slugify(value: str, fallback: str = "scenario") -> str:
     return slug or fallback
 
 
+def _is_ios_input_step(step: Any) -> bool:
+    """Return ``True`` when ``step`` represents an iOS text input action."""
+
+    if not isinstance(step, dict):
+        return False
+
+    action = str(step.get("action", "")).strip().lower()
+    if action != "input":
+        return False
+
+    platform = str(step.get("platform", "")).strip().lower()
+    if platform and "ios" not in platform:
+        return False
+
+    return True
+
+
+def _has_keyboard_confirmation(steps: list[Any], start_index: int) -> bool:
+    """Return ``True`` if steps after ``start_index`` already tap the Done key."""
+
+    confirmation_terms = {"done", "return", "go", "enter", "submit"}
+
+    for candidate in steps[start_index + 1 :]:
+        if not isinstance(candidate, dict):
+            continue
+
+        action = str(candidate.get("action", "")).strip().lower()
+        if action == "wait":
+            # Skip passive waits while searching for the next meaningful action.
+            continue
+
+        selector = str(candidate.get("selector", "")).strip().lower()
+        label = str(candidate.get("label", "")).strip().lower()
+        operation = str(candidate.get("operation", "")).strip().lower()
+        explanation = str(candidate.get("explanation", "")).strip().lower()
+
+        if action in {"tap", "click"}:
+            if selector in confirmation_terms or label in confirmation_terms:
+                return True
+            if operation in confirmation_terms:
+                return True
+            if "keyboard" in explanation and any(
+                term in explanation for term in confirmation_terms
+            ):
+                return True
+
+        # Once a non-wait action is seen we stop searching further ahead.
+        return False
+
+    return False
+
+
+def _build_synthetic_done_step(step: dict[str, Any]) -> dict[str, Any]:
+    """Create a synthetic tap action that dismisses the iOS keyboard."""
+
+    follow_up: dict[str, Any] = {
+        "action": "tap",
+        "operation": "enter",
+        "strategy": "accessibility_id",
+        "selector": "Done",
+        "explanation": (
+            "Tap the keyboard's Done button to confirm the text entry and dismiss the "
+            "iOS keyboard when the original run omitted the action."
+        ),
+        "result": "success",
+    }
+
+    for key in ("target", "platform"):
+        if key in step:
+            follow_up[key] = step[key]
+
+    if "platform" not in follow_up:
+        follow_up["platform"] = "ios"
+
+    return follow_up
+
+
+def _ensure_keyboard_follow_ups(task_entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Inject synthetic keyboard confirmation steps for iOS text entry actions."""
+
+    steps = task_entry.get("steps")
+    if not isinstance(steps, list):
+        return task_entry
+
+    augmented_steps: list[Any] = []
+    added_follow_up = False
+
+    for index, step in enumerate(steps):
+        augmented_steps.append(step)
+
+        if not _is_ios_input_step(step):
+            continue
+
+        if _has_keyboard_confirmation(steps, index):
+            continue
+
+        augmented_steps.append(_build_synthetic_done_step(step))
+        added_follow_up = True
+
+    if added_follow_up:
+        task_entry = dict(task_entry)
+        task_entry["steps"] = augmented_steps
+
+    return task_entry
+
+
 def _safe_trimmed_str(value: Any) -> Optional[str]:
     """Return ``value`` stripped when it is a non-empty string."""
 
@@ -496,7 +602,10 @@ def generate_pytest_from_summary(
     else:
         raise CodegenError("Summary data must be an object or list of tasks")
 
-    task_entry = _select_summary_task(summary_payload, task_name, task_index)
+    task_entry = copy.deepcopy(
+        _select_summary_task(summary_payload, task_name, task_index)
+    )
+    task_entry = _ensure_keyboard_follow_ups(task_entry)
 
     function_name = f"test_{_slugify(task_entry.get('name', 'scenario'))}"
     metadata = (
