@@ -13,6 +13,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
+from backend_server.example_bootstrap import (
+    GenerationTask,
+    ExampleConfig,
+    build_examples_block,
+    load_example_config,
+    record_generation_result,
+    sanitize_text,
+)
+
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -532,12 +541,13 @@ def _build_messages(
     metadata: Dict[str, Any],
     function_name: str,
     fixture_name: str,
-) -> list[dict[str, Any]]:
-    """Create the chat completion messages for the codegen request."""
+    config: ExampleConfig,
+) -> Tuple[list[dict[str, Any]], GenerationTask]:
+    """Create the chat completion messages and related metadata."""
 
     task_json = json.dumps(task_entry, indent=2, ensure_ascii=False)
     metadata_json = json.dumps(metadata, indent=2, ensure_ascii=False)
-    driver_instruction = _driver_instruction(
+    driver_instruction_raw = _driver_instruction(
         metadata.get("driver_context"), fixture_name
     )
 
@@ -550,38 +560,67 @@ def _build_messages(
         "the expected behaviour."
     )
 
-    user_prompt = (
-        "Produce Python source code for a pytest module that exercises the described "
-        "scenario. Follow these guidelines:\n"
-        "1. Output only valid Python code with no Markdown fences or commentary.\n"
-        "2. Target the Appium Python client for iOS automation.\n"
-        "3. Provide all necessary imports, including pytest, typing hints, "
-        "AppiumBy, WebDriverWait, expected_conditions, Optional, webdriver, and "
-        "XCUITestOptions.\n"
-        f"{driver_instruction}"
-        "5. Implement helper functions as needed to keep the test readable, such as "
-        "`tap` or `enter_text` using WebDriverWait for element lookup.\n"
-        f"6. Define a test function named '{function_name}' that invokes the "
-        f"'{fixture_name}' fixture.\n"
-        "7. Translate each step in the run summary into clear test logic with "
-        "explanatory comments derived from the step explanations.\n"
-        "8. Convert 'tap' actions into `.click()` calls, 'input' actions into "
-        "`clear()` + `send_keys()`, and incorporate assertions for error or "
-        "validation steps when applicable.\n"
-        "9. Assert on the final expected outcome using the information from the "
-        "summary (for example, verifying alert text).\n"
-        "10. The resulting module must be immediately executable with pytest without "
-        "manual editing beyond filling in TODO placeholders.\n\n"
+    driver_instruction = sanitize_text(driver_instruction_raw).strip()
+    guidelines_lines = [
+        "Produce Python source code for a pytest module that exercises the described scenario. Follow these guidelines:",
+        "1. Output only valid Python code with no Markdown fences or commentary.",
+        "2. Target the Appium Python client for iOS automation.",
+        "3. Provide all necessary imports, including pytest, typing hints, AppiumBy, WebDriverWait, expected_conditions, Optional, webdriver, and XCUITestOptions.",
+        driver_instruction,
+        f"5. Implement helper functions as needed to keep the test readable, such as `tap` or `enter_text` using WebDriverWait for element lookup.",
+        f"6. Define a test function named '{function_name}' that invokes the '{fixture_name}' fixture.",
+        "7. Translate each step in the run summary into clear test logic with explanatory comments derived from the step explanations.",
+        "8. Convert 'tap' actions into `.click()` calls, 'input' actions into `clear()` + `send_keys()`, and incorporate assertions for error or validation steps when applicable.",
+        "9. Assert on the final expected outcome using the information from the summary (for example, verifying alert text).",
+        "10. The resulting module must be immediately executable with pytest without manual editing beyond filling in TODO placeholders.",
+    ]
+    guidelines = "\n".join(line for line in guidelines_lines if line)
+
+    sanitized_guidelines = sanitize_text(guidelines)
+    sanitized_metadata = sanitize_text(metadata_json)
+    sanitized_task = sanitize_text(task_json)
+    context_block = (
         "Automation metadata:\n"
-        f"{metadata_json}\n\n"
+        f"{sanitized_metadata}\n\n"
         "Scenario summary entry:\n"
-        f"{task_json}"
+        f"{sanitized_task}"
     )
 
-    return [
+    tags: list[str] = []
+    name = task_entry.get("name")
+    if isinstance(name, str):
+        tags.append(name)
+    platform = metadata.get("platform")
+    if isinstance(platform, str):
+        tags.append(platform)
+    driver_context = metadata.get("driver_context")
+    if isinstance(driver_context, dict):
+        platform_value = driver_context.get("platform")
+        if isinstance(platform_value, str):
+            tags.append(platform_value)
+
+    generation_task = GenerationTask(
+        instruction=sanitized_guidelines,
+        context=context_block,
+        language="python",
+        framework="pytest",
+        tags=tags,
+    )
+
+    examples_block = build_examples_block(generation_task, config=config)
+    sections = [sanitized_guidelines]
+    if examples_block:
+        sections.append("You MUST follow the style and patterns shown below:\n\n" + examples_block)
+    sections.append(context_block)
+
+    user_prompt = "\n\n".join(section for section in sections if section)
+
+    messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+
+    return messages, generation_task
 
 
 def generate_pytest_from_summary(
@@ -626,11 +665,13 @@ def generate_pytest_from_summary(
         metadata["driver_context"] = driver_context
 
     fixture_name = _suggest_fixture_name(driver_context)
-    messages = _build_messages(
+    config: ExampleConfig = load_example_config()
+    messages, generation_task = _build_messages(
         task_entry,
         metadata=metadata,
         function_name=function_name,
         fixture_name=fixture_name,
+        config=config,
     )
 
     api_key = os.getenv("OPENAI_CODER_API_KEY")
@@ -683,12 +724,40 @@ def generate_pytest_from_summary(
     if not code:
         raise CodegenError("Generated code was empty after stripping code fences")
 
-    return CodegenResult(
+    result = CodegenResult(
         code=code,
         model=response.model or model_name,
         task_name=task_entry.get("name"),
         function_name=function_name,
     )
+
+    usage = getattr(response, "usage", None)
+    token_usage: Optional[float] = None
+    if usage is not None:
+        total_tokens = getattr(usage, "total_tokens", None)
+        if total_tokens is None and isinstance(usage, dict):
+            total_tokens = usage.get("total_tokens")
+        if total_tokens is not None:
+            try:
+                token_usage = float(total_tokens)
+            except (TypeError, ValueError):
+                token_usage = None
+
+    metrics: Dict[str, float] = {
+        "tests_passed": 0.0,
+        "lint_errors": 0.0,
+        "runtime_seconds": 0.0,
+        "compile_success": 0.0,
+    }
+    if token_usage is not None:
+        metrics["token_usage"] = token_usage
+
+    try:
+        record_generation_result(generation_task, code, metrics, config=config)
+    except Exception:  # pragma: no cover - storage failure shouldn't block codegen
+        logger.debug("Example recording failed", exc_info=True)
+
+    return result
 
 
 async def async_generate_pytest_from_path(
