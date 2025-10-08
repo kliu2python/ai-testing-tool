@@ -46,8 +46,8 @@ except ModuleNotFoundError as exc:  # pragma: no cover - import guard
         "Install it with 'pip install mcp'."
     ) from exc
 
-from ai-testing-tool.libraries.cli.fortigate_library import FortigateBase
-from ai-testing-tool.libraries.cli.users.fortigate_user import FortigateUser
+from backend_server.libraries.cli.fortigate_library import FortigateBase
+from backend_server.libraries.cli.users.fortigate_user import FortigateUser
 
 
 @dataclass
