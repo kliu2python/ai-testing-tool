@@ -524,19 +524,18 @@ def generate_pytest_from_summary(
         fixture_name=fixture_name,
     )
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("OPENAI_CODER_API_KEY")
     if not api_key:
-        raise CodegenError("OPENAI_API_KEY environment variable is required for codegen")
+        raise CodegenError("OPENAI_CODER_API_KEY environment variable is required for codegen")
 
     base_url = (
         os.getenv("OPENAI_CODEGEN_BASE_URL")
-        or os.getenv("OPENAI_BASE_URL")
+        or os.getenv("OPENAI_CODER_BASE_URL")
         or None
     )
     model_name = (
         model
-        or os.getenv("OPENAI_CODEGEN_MODEL")
-        or os.getenv("OPENAI_MODEL")
+        or os.getenv("OPENAI_CODER_MODEL")
     )
 
     if not model_name:
