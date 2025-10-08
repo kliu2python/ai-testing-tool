@@ -58,8 +58,8 @@ const PROMPT_TEMPLATES: Record<Exclude<PromptOption, "custom">, string> = {
 };
 
 const PLATFORM_SERVERS: Record<PlatformOption, string> = {
-  android: "http://10.160.24.60:4723",
-  ios: "http://10.160.13.112:4723",
+  android: "http://10.160.24.110:8080/wd/hub",
+  ios: "http://10.160.24.110:8080/wd/hub",
   web: "http://10.160.24.88:31590"
 };
 
