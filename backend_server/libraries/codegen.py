@@ -304,12 +304,23 @@ def _driver_instruction(
 ) -> str:
     """Return instruction text for configuring the driver fixture."""
 
+    snippet_instruction = (
+        "   - Initialise the driver using this exact sequence, updating only the "
+        "capabilities when necessary:\n"
+        "options = XCUITestOptions()\n"
+        "options.load_capabilities(caps)\n"
+        "driver = webdriver.Remote(\"http://10.160.24.110:8080/wd/hub\", options=options)\n"
+        "yield driver\n"
+        "driver.quit()\n"
+    )
+
     if not driver_context:
         return (
             f"4. Create a pytest fixture named '{fixture_name}' that builds an Appium "
             "driver using an Appium server URL sourced from the APPIUM_SERVER_URL "
             "environment variable (default to http://localhost:4723) and placeholder "
             "desired capabilities with TODO comments for values that must be customised.\n"
+            f"{snippet_instruction}"
         )
 
     server_url = driver_context.get("server_url") or "http://localhost:4723"
@@ -334,6 +345,7 @@ def _driver_instruction(
         details.append(
             "   - Provide concrete desired capabilities appropriate for this platform."
         )
+    details.append(snippet_instruction.rstrip("\n"))
     return "\n".join(details) + "\n"
 
 
@@ -438,7 +450,8 @@ def _build_messages(
         "1. Output only valid Python code with no Markdown fences or commentary.\n"
         "2. Target the Appium Python client for iOS automation.\n"
         "3. Provide all necessary imports, including pytest, typing hints, "
-        "AppiumBy, WebDriverWait, expected_conditions, and Optional.\n"
+        "AppiumBy, WebDriverWait, expected_conditions, Optional, webdriver, and "
+        "XCUITestOptions.\n"
         f"{driver_instruction}"
         "5. Implement helper functions as needed to keep the test readable, such as "
         "`tap` or `enter_text` using WebDriverWait for element lookup.\n"
