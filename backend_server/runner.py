@@ -1508,7 +1508,32 @@ def safe_json_loads(raw):
 
         clipped = clip_balanced(s)
         logger.info(f"!!!Clipped {clipped}")
-        return json.loads(clipped)
+        try:
+            return json.loads(clipped)
+        except json.JSONDecodeError as exc:
+            repaired = _repair_invalid_escapes(clipped)
+            if repaired != clipped:
+                logger.info("!!!Repaired invalid escape sequences in clipped JSON")
+                return json.loads(repaired)
+            raise exc
+
+
+def _repair_invalid_escapes(text: str) -> str:
+    """Best-effort fix for non-standard escape sequences in JSON snippets."""
+
+    def replace_hex(match: re.Match) -> str:
+        try:
+            return chr(int(match.group(1), 16))
+        except ValueError:
+            return match.group(0)
+
+    repaired = re.sub(r"\\x([0-9A-Fa-f]{2})", replace_hex, text)
+
+    def escape_unrecognised(match: re.Match) -> str:
+        return "\\\\" + match.group(1)
+
+    repaired = re.sub(r"\\([^\"\\/bfnrtu])", escape_unrecognised, repaired)
+    return repaired
 
 
 def get_current_timestamp():
