@@ -6,6 +6,7 @@ import base64
 import datetime
 import json
 import logging
+import mimetypes
 import os
 import re
 import threading
@@ -163,6 +164,18 @@ def image_to_base64(image_path: str) -> Optional[str]:
     return None
 
 
+def _image_data_url(image_path: str) -> Optional[str]:
+    base64_content = image_to_base64(image_path)
+    if not base64_content:
+        return None
+
+    mime_type, _ = mimetypes.guess_type(image_path)
+    if not mime_type:
+        mime_type = "image/png"
+
+    return f"data:{mime_type};base64,{base64_content}"
+
+
 # -----------------------------
 # LLM: next action generation
 # -----------------------------
@@ -226,8 +239,8 @@ def _resolve_task_llm_mode(preference: Optional[str], task: Dict[str, Any]) -> s
 def _describe_screenshot_with_vision_model(screenshot_path: str) -> Optional[str]:
     """Return a textual description of ``screenshot_path`` using the vision model."""
 
-    screenshot_base64 = image_to_base64(screenshot_path)
-    if not screenshot_base64:
+    data_url = _image_data_url(screenshot_path)
+    if not data_url:
         return None
 
     api_key = os.getenv("OPENAI_VISION_API_KEY")
@@ -257,10 +270,7 @@ def _describe_screenshot_with_vision_model(screenshot_path: str) -> Optional[str
                 "Highlight key UI elements, their labels, and any state that might influence the next action."
             ),
         },
-        {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{screenshot_base64}"},
-        },
+        {"type": "image_url", "image_url": {"url": data_url}},
     ]
 
     try:
@@ -309,6 +319,19 @@ def generate_next_action(
         user_content.append(
             {"type": "text", "text": f"# Screen Description \n {screen_description}"}
         )
+
+    image_data_url: Optional[str] = None
+    if resolved_mode == "vision" and screenshot_path:
+        image_data_url = _image_data_url(screenshot_path)
+        if image_data_url:
+            user_content.append(
+                {"type": "image_url", "image_url": {"url": image_data_url}}
+            )
+        else:
+            logger.debug(
+                "Vision mode requested but screenshot '%s' could not be encoded",
+                screenshot_path,
+            )
     if available_targets:
         target_lines = ["# Available Targets"]
         for alias, meta in available_targets.items():
@@ -335,9 +358,9 @@ def generate_next_action(
         user_content.append(
             {"type": "text", "text": f"# Active Target \n {active_target}"}
         )
-    elif resolved_mode == "vision":
+    elif resolved_mode == "vision" and not image_data_url:
         logger.debug(
-            "Vision mode requested but no screenshot description was generated for '%s'",
+            "Vision mode requested but no screenshot was available for '%s'",
             screenshot_path,
         )
 
@@ -347,12 +370,19 @@ def generate_next_action(
         {"role": "user", "content": user_content},
     ]
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY environment variable is required")
+    if resolved_mode == "vision":
+        api_key = os.getenv("OPENAI_VISION_API_KEY") or os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_VISION_BASE_URL") or os.getenv(
+            "OPENAI_BASE_URL"
+        )
+        model = os.getenv("OPENAI_VISION_MODEL") or os.getenv("OPENAI_MODEL")
+    else:
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL")
+        model = os.getenv("OPENAI_MODEL")
 
-    base_url = os.getenv("OPENAI_BASE_URL")
-    model = os.getenv("OPENAI_MODEL")
+    if not api_key:
+        raise RuntimeError("No API key configured for next action generation")
 
     if not model:
         raise RuntimeError("No OpenAI model configured for next action generation")
