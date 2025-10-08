@@ -301,37 +301,47 @@ def generate_next_action(
     available_targets: Optional[Dict[str, Dict[str, str]]] = None,
     active_target: Optional[str] = None,
 ) -> str:
-    resolved_mode = _normalise_llm_mode(llm_mode)
-    _page_src = read_file_content(page_source_file) or ""
-    _history_actions_str = "\n".join(_history_actions)
+    _ = _normalise_llm_mode(llm_mode)
+    page_source = read_file_content(page_source_file) or ""
+    history_actions_str = "\n".join(_history_actions)
 
     if not screen_description and screenshot_path:
         screen_description = _describe_screenshot_with_vision_model(screenshot_path)
         logger.info(f"The screen description is {screen_description}")
 
+    screenshot_base64: Optional[str] = None
+    if screenshot_path:
+        screenshot_base64 = image_to_base64(screenshot_path)
+        if not screenshot_base64:
+            logger.debug(
+                "Screenshot '%s' could not be encoded for next action generation",
+                screenshot_path,
+            )
+
+    messages: List[Any] = []
+    messages.append({"role": "system", "content": _prompt})
+
     user_content: List[Dict[str, Any]] = [
         {"type": "text", "text": f"# Task \n {_task}"},
-        {"type": "text", "text": f"# History of Actions \n {_history_actions_str}"},
-        {"type": "text", "text": f"# Source of Page \n ```yaml\n {_page_src} \n```"},
+        {"type": "text", "text": f"# History of Actions \n {history_actions_str}"},
+        {"type": "text", "text": f"# Source of Page \n ```yaml\n {page_source} \n```"},
     ]
+
+    if screenshot_base64:
+        user_content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{screenshot_base64}"
+                },
+            }
+        )
 
     if screen_description:
         user_content.append(
             {"type": "text", "text": f"# Screen Description \n {screen_description}"}
         )
 
-    image_data_url: Optional[str] = None
-    if resolved_mode == "vision" and screenshot_path:
-        image_data_url = _image_data_url(screenshot_path)
-        if image_data_url:
-            user_content.append(
-                {"type": "image_url", "image_url": {"url": image_data_url}}
-            )
-        else:
-            logger.debug(
-                "Vision mode requested but screenshot '%s' could not be encoded",
-                screenshot_path,
-            )
     if available_targets:
         target_lines = ["# Available Targets"]
         for alias, meta in available_targets.items():
@@ -358,28 +368,12 @@ def generate_next_action(
         user_content.append(
             {"type": "text", "text": f"# Active Target \n {active_target}"}
         )
-    elif resolved_mode == "vision" and not image_data_url:
-        logger.debug(
-            "Vision mode requested but no screenshot was available for '%s'",
-            screenshot_path,
-        )
 
-    system_prompt = _prompt
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
-    ]
+    messages.append({"role": "user", "content": user_content})
 
-    if resolved_mode == "vision":
-        api_key = os.getenv("OPENAI_VISION_API_KEY") or os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_VISION_BASE_URL") or os.getenv(
-            "OPENAI_BASE_URL"
-        )
-        model = os.getenv("OPENAI_VISION_MODEL") or os.getenv("OPENAI_MODEL")
-    else:
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL")
-        model = os.getenv("OPENAI_MODEL")
+    api_key = os.getenv("OPENAI_VISION_API_KEY") or os.getenv("OPENAI_API_KEY")
+    base_url = os.getenv("OPENAI_VISION_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+    model = os.getenv("OPENAI_VISION_MODEL") or os.getenv("OPENAI_MODEL")
 
     if not api_key:
         raise RuntimeError("No API key configured for next action generation")
