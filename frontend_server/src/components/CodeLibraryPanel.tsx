@@ -287,17 +287,17 @@ export default function CodeLibraryPanel({
                   {entries.map((entry) => {
                     const success = entry.success_count ?? 0;
                     const failure = entry.failure_count ?? 0;
-                    const stats =
-                      success || failure
-                        ? `Runs: ${success}✓ / ${failure}✗`
-                        : null;
-                    const secondary = [
-                      entry.model ? `Model: ${entry.model}` : null,
-                      entry.updated_at ? `Updated: ${entry.updated_at}` : null,
-                      stats
-                    ]
-                      .filter(Boolean)
-                      .join(" • ");
+                    const hasRunData = success || failure;
+                    const secondary = hasRunData ? (
+                      <Stack direction="row" spacing={1} component="span">
+                        <Typography component="span" color="success.main" fontWeight={600}>
+                          {success} passed
+                        </Typography>
+                        <Typography component="span" color="error.main" fontWeight={600}>
+                          {failure} failed
+                        </Typography>
+                      </Stack>
+                    ) : null;
                     return (
                       <ListItem key={entry.id} disablePadding>
                         <ListItemButton
