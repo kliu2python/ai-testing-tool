@@ -118,6 +118,8 @@ export interface CodegenRecordSummary {
   summary_path?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  success_count?: number | null;
+  failure_count?: number | null;
 }
 
 export interface CodegenRecordDetail extends CodegenRecordSummary {
