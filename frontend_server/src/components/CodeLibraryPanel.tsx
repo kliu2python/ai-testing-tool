@@ -26,6 +26,7 @@ import type {
 import JsonOutput from "./JsonOutput";
 import PlayCircleIcon from "@mui/icons-material/PlayCircle";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import DeleteIcon from "@mui/icons-material/Delete";
 
 interface CodeLibraryPanelProps {
   baseUrl: string;
@@ -50,6 +51,7 @@ export default function CodeLibraryPanel({
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionResult, setExecutionResult] =
     useState<PytestExecutionResponse | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const hasEntries = entries.length > 0;
   const requireToken = useCallback(() => {
@@ -158,11 +160,78 @@ export default function CodeLibraryPanel({
         ? "Pytest module executed successfully"
         : `Pytest module finished with exit code ${exit}`;
       onNotify({ message, severity: exit === 0 ? "success" : "warning" });
+      setEntries((prev) =>
+        prev.map((entry) => {
+          if (entry.id !== selectedId) {
+            return entry;
+          }
+          const successDelta = exit === 0 ? 1 : 0;
+          const failureDelta = exit === 0 ? 0 : 1;
+          return {
+            ...entry,
+            success_count: (entry.success_count ?? 0) + successDelta,
+            failure_count: (entry.failure_count ?? 0) + failureDelta
+          };
+        })
+      );
+      setSelectedDetail((prev) => {
+        if (!prev || prev.id !== selectedId) {
+          return prev;
+        }
+        const successDelta = exit === 0 ? 1 : 0;
+        const failureDelta = exit === 0 ? 0 : 1;
+        return {
+          ...prev,
+          success_count: (prev.success_count ?? 0) + successDelta,
+          failure_count: (prev.failure_count ?? 0) + failureDelta
+        };
+      });
     } else {
       const message = response.error ?? `Request failed with ${response.status}`;
       onNotify({ message, severity: "error" });
     }
   }, [baseUrl, onNotify, requireToken, selectedId]);
+
+  const handleDelete = useCallback(async () => {
+    if (!selectedId) {
+      return;
+    }
+    if (!window.confirm("Delete this generated code entry?")) {
+      return;
+    }
+    const authToken = requireToken();
+    if (!authToken) {
+      return;
+    }
+    setDeleteLoading(true);
+    const response = await apiRequest<null>(
+      baseUrl,
+      "delete",
+      `/codegen/pytest/${selectedId}`,
+      undefined,
+      authToken
+    );
+    setDeleteLoading(false);
+    if (response.ok) {
+      onNotify({ message: "Deleted generated code entry", severity: "success" });
+      setEntries((prev) => prev.filter((entry) => entry.id !== selectedId));
+      setSelectedId(null);
+      setSelectedDetail(null);
+      setExecutionResult(null);
+    } else {
+      const message = response.error ?? `Request failed with ${response.status}`;
+      onNotify({ message, severity: "error" });
+    }
+  }, [baseUrl, onNotify, requireToken, selectedId]);
+
+  const totalSuccesses = entries.reduce(
+    (sum, entry) => sum + (entry.success_count ?? 0),
+    0
+  );
+  const totalFailures = entries.reduce(
+    (sum, entry) => sum + (entry.failure_count ?? 0),
+    0
+  );
 
   return (
     <Stack spacing={3}>
@@ -184,6 +253,11 @@ export default function CodeLibraryPanel({
           </span>
         </Tooltip>
       </Stack>
+      {hasEntries ? (
+        <Typography variant="body2" color="text.secondary">
+          Test runs: {totalSuccesses} success • {totalFailures} failed
+        </Typography>
+      ) : null}
       {!hasEntries && !loading ? (
         <Alert severity="info">
           Generate pytest code from a task result to populate this library.
@@ -211,9 +285,16 @@ export default function CodeLibraryPanel({
               ) : (
                 <List dense disablePadding>
                   {entries.map((entry) => {
+                    const success = entry.success_count ?? 0;
+                    const failure = entry.failure_count ?? 0;
+                    const stats =
+                      success || failure
+                        ? `Runs: ${success}✓ / ${failure}✗`
+                        : null;
                     const secondary = [
                       entry.model ? `Model: ${entry.model}` : null,
-                      entry.updated_at ? `Updated: ${entry.updated_at}` : null
+                      entry.updated_at ? `Updated: ${entry.updated_at}` : null,
+                      stats
                     ]
                       .filter(Boolean)
                       .join(" • ");
@@ -241,20 +322,39 @@ export default function CodeLibraryPanel({
             <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
               <Stack direction="row" justifyContent="space-between" alignItems="center">
                 <Typography variant="h6">Entry Details</Typography>
-                <Tooltip title={selectedId ? "Execute with pytest" : "Select an entry first"}>
-                  <span>
-                    <Button
-                      variant="contained"
-                      startIcon={<PlayCircleIcon />}
-                      disabled={!selectedId || executionLoading || detailLoading}
-                      onClick={() => {
-                        void handleExecute();
-                      }}
-                    >
-                      {executionLoading ? "Running…" : "Run Pytest"}
-                    </Button>
-                  </span>
-                </Tooltip>
+                <Stack direction="row" spacing={1}>
+                  <Tooltip title={selectedId ? "Execute with pytest" : "Select an entry first"}>
+                    <span>
+                      <Button
+                        variant="contained"
+                        startIcon={<PlayCircleIcon />}
+                        disabled={
+                          !selectedId || executionLoading || detailLoading || deleteLoading
+                        }
+                        onClick={() => {
+                          void handleExecute();
+                        }}
+                      >
+                        {executionLoading ? "Running…" : "Run Pytest"}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  <Tooltip title={selectedId ? "Delete this entry" : "Select an entry first"}>
+                    <span>
+                      <Button
+                        variant="outlined"
+                        color="error"
+                        startIcon={<DeleteIcon />}
+                        disabled={!selectedId || detailLoading || deleteLoading}
+                        onClick={() => {
+                          void handleDelete();
+                        }}
+                      >
+                        {deleteLoading ? "Deleting…" : "Delete"}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </Stack>
               </Stack>
               {detailLoading ? (
                 <Stack direction="row" spacing={2} alignItems="center">
@@ -292,6 +392,10 @@ export default function CodeLibraryPanel({
                       Summary Path: {selectedDetail.summary_path}
                     </Typography>
                   ) : null}
+                  <Typography variant="body2" color="text.secondary">
+                    Test Runs: {selectedDetail.success_count ?? 0} success • {" "}
+                    {selectedDetail.failure_count ?? 0} failed
+                  </Typography>
                   <Typography variant="body2" color="text.secondary">
                     Created: {selectedDetail.created_at ?? "Unknown"}
                   </Typography>

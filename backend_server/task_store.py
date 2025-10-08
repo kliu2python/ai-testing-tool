@@ -80,11 +80,26 @@ def ensure_task_tables(conn: sqlite3.Connection) -> None:
         function_name TEXT,
         summary_path TEXT,
         summary_json TEXT,
+        success_count INTEGER NOT NULL DEFAULT 0,
+        failure_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     """
+    )
+
+    _ensure_column(
+        conn,
+        "codegen_history",
+        "success_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        conn,
+        "codegen_history",
+        "failure_count",
+        "INTEGER NOT NULL DEFAULT 0",
     )
 
 
@@ -482,9 +497,10 @@ def store_codegen_result(
             """
             INSERT INTO codegen_history (
                 user_id, task_name, task_index, model, code, function_name,
-                summary_path, summary_json, created_at, updated_at
+                summary_path, summary_json, success_count, failure_count,
+                created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -495,6 +511,8 @@ def store_codegen_result(
                 function_name,
                 summary_path_norm,
                 summary_json_text,
+                0,
+                0,
                 now,
                 now,
             ),
@@ -515,7 +533,8 @@ def list_codegen_results(user_id: Optional[str]) -> List[Dict[str, Any]]:
             cursor = conn.execute(
                 """
                 SELECT id, user_id, task_name, task_index, model, function_name,
-                       summary_path, created_at, updated_at
+                       summary_path, success_count, failure_count, created_at,
+                       updated_at
                   FROM codegen_history
               ORDER BY updated_at DESC
                 """
@@ -524,7 +543,8 @@ def list_codegen_results(user_id: Optional[str]) -> List[Dict[str, Any]]:
             cursor = conn.execute(
                 """
                 SELECT id, user_id, task_name, task_index, model, function_name,
-                       summary_path, created_at, updated_at
+                       summary_path, success_count, failure_count, created_at,
+                       updated_at
                   FROM codegen_history
                  WHERE user_id = ?
               ORDER BY updated_at DESC
@@ -543,6 +563,8 @@ def list_codegen_results(user_id: Optional[str]) -> List[Dict[str, Any]]:
                     "model": row["model"],
                     "function_name": row["function_name"],
                     "summary_path": row["summary_path"],
+                    "success_count": int(row["success_count"] or 0),
+                    "failure_count": int(row["failure_count"] or 0),
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 }
@@ -561,7 +583,8 @@ def load_codegen_result(record_id: int) -> Optional[Dict[str, Any]]:
         cursor = conn.execute(
             """
             SELECT id, user_id, task_name, task_index, model, code, function_name,
-                   summary_path, summary_json, created_at, updated_at
+                   summary_path, summary_json, success_count, failure_count,
+                   created_at, updated_at
               FROM codegen_history
              WHERE id = ?
             """,
@@ -586,6 +609,8 @@ def load_codegen_result(record_id: int) -> Optional[Dict[str, Any]]:
             "function_name": row["function_name"],
             "summary_path": row["summary_path"],
             "summary_json": summary_json,
+            "success_count": int(row["success_count"] or 0),
+            "failure_count": int(row["failure_count"] or 0),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -600,6 +625,41 @@ def delete_task_run(task_id: str) -> None:
     try:
         ensure_task_tables(conn)
         conn.execute("DELETE FROM task_runs WHERE id = ?", (task_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_codegen_execution(record_id: int, success: bool) -> None:
+    """Increment execution counters for ``record_id`` based on ``success``."""
+
+    column = "success_count" if success else "failure_count"
+    now = dt.datetime.utcnow().isoformat()
+
+    conn = _connect()
+    try:
+        ensure_task_tables(conn)
+        conn.execute(
+            f"""
+            UPDATE codegen_history
+               SET {column} = COALESCE({column}, 0) + 1,
+                   updated_at = ?
+             WHERE id = ?
+            """,
+            (now, record_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_codegen_result(record_id: int) -> None:
+    """Remove the stored code generation result identified by ``record_id``."""
+
+    conn = _connect()
+    try:
+        ensure_task_tables(conn)
+        conn.execute("DELETE FROM codegen_history WHERE id = ?", (record_id,))
         conn.commit()
     finally:
         conn.close()

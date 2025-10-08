@@ -21,7 +21,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 import logging
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field, ValidationError, model_validator
@@ -40,6 +40,7 @@ from backend_server.task_queue import (
     status_key,
 )
 from backend_server.task_store import (
+    delete_codegen_result,
     delete_task_run,
     ensure_task_tables,
     list_codegen_results,
@@ -48,6 +49,7 @@ from backend_server.task_store import (
     load_latest_task_request,
     load_task_metadata,
     load_task_run,
+    record_codegen_execution,
     register_task_run,
     set_task_status,
     store_codegen_result,
@@ -519,6 +521,8 @@ class CodegenRecordSummary(BaseModel):
     summary_path: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    success_count: int = 0
+    failure_count: int = 0
 
 
 class CodegenRecordDetail(CodegenRecordSummary):
@@ -904,6 +908,8 @@ async def list_codegen_history(
             summary_path=record.get("summary_path"),
             created_at=record.get("created_at"),
             updated_at=record.get("updated_at"),
+            success_count=record.get("success_count", 0),
+            failure_count=record.get("failure_count", 0),
         )
         for record in records
     ]
@@ -944,7 +950,44 @@ async def get_codegen_history_entry(
         updated_at=record.get("updated_at"),
         code=record.get("code", ""),
         summary_json=record.get("summary_json"),
+        success_count=record.get("success_count", 0),
+        failure_count=record.get("failure_count", 0),
     )
+
+
+@app.delete(
+    "/codegen/pytest/{record_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a stored pytest code generation result",
+)
+async def delete_codegen_history_entry(
+    record_id: int, current_user: User = Depends(get_current_user)
+) -> Response:
+    """Remove the stored code for ``record_id`` if permitted."""
+
+    try:
+        record = load_codegen_result(record_id)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        logger.exception("Failed to load stored code %s: %s", record_id, exc)
+        raise HTTPException(
+            status_code=503, detail="Failed to delete stored code"
+        ) from exc
+
+    if record is None:
+        raise HTTPException(status_code=404, detail="Generated code not found")
+
+    if not current_user.is_admin and record.get("user_id") != current_user.id:
+        raise HTTPException(status_code=403, detail="Generated code is not accessible")
+
+    try:
+        delete_codegen_result(record_id)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        logger.exception("Failed to delete stored code %s: %s", record_id, exc)
+        raise HTTPException(
+            status_code=503, detail="Failed to delete stored code"
+        ) from exc
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.post(
@@ -1002,10 +1045,18 @@ async def execute_codegen_history_entry(
         ) from exc
 
     duration = max((finished_at - started_at).total_seconds(), 0.0)
+    exit_code = process.returncode or 0
+
+    try:
+        record_codegen_execution(record_id, exit_code == 0)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        logger.exception(
+            "Failed to update execution counters for %s: %s", record_id, exc
+        )
 
     return PytestExecutionResponse(
         record_id=record_id,
-        exit_code=process.returncode or 0,
+        exit_code=exit_code,
         stdout=_decode_stream(stdout_bytes),
         stderr=_decode_stream(stderr_bytes),
         started_at=started_at.isoformat(),
