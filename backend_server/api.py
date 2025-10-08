@@ -595,40 +595,6 @@ class TaskCollectionResponse(BaseModel):
 # -----------------------------
 # App
 # -----------------------------
-def _parse_cors_origins(value: Optional[str]) -> List[str]:
-    """Return a normalised list of CORS origins from ``value``.
-
-    ``value`` can be provided either as a comma separated string or a JSON array.
-    Whitespace is ignored and empty entries are discarded. When ``value`` is not
-    provided a wildcard origin is returned to preserve the existing behaviour.
-    """
-
-    if value is None:
-        return ["*"]
-
-    value = value.strip()
-    if not value:
-        return ["*"]
-
-    if value.startswith("["):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            logger.warning(
-                "Invalid JSON provided for CORS_ALLOW_ORIGINS: %s", value
-            )
-        else:
-            if isinstance(parsed, list) and all(isinstance(item, str) for item in parsed):
-                origins = [item.strip() for item in parsed if item and item.strip()]
-                return origins or ["*"]
-            logger.warning(
-                "CORS_ALLOW_ORIGINS JSON payload must be a list of strings: %s", value
-            )
-
-    origins = [origin.strip() for origin in value.split(",") if origin.strip()]
-    return origins or ["*"]
-
-
 app = FastAPI(
     title="AI Testing Tool API",
     version="1.0.0",
@@ -637,15 +603,11 @@ app = FastAPI(
     ),
 )
 
-cors_origins = _parse_cors_origins(os.getenv("CORS_ALLOW_ORIGINS"))
-allow_credentials = True
-if cors_origins == ["*"]:
-    allow_credentials = False
-
+# CORS (adjust origins as needed)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=allow_credentials,
+    allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
