@@ -1167,6 +1167,39 @@ def _hide_keyboard_safely(
     return follow_ups
 
 
+def _expand_steps_with_follow_ups(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return ``steps`` plus any recorded follow-up actions as standalone entries."""
+
+    if not isinstance(steps, list):
+        return []
+
+    expanded: List[Dict[str, Any]] = []
+
+    for step in steps:
+        if not isinstance(step, dict):
+            expanded.append(step)
+            continue
+
+        expanded.append(step)
+
+        follow_ups = step.get("follow_up_actions")
+        if not isinstance(follow_ups, list):
+            continue
+
+        for follow_up in follow_ups:
+            if not isinstance(follow_up, dict):
+                continue
+
+            follow_copy = dict(follow_up)
+            if "target" not in follow_copy and step.get("target") is not None:
+                follow_copy["target"] = step.get("target")
+            if "platform" not in follow_copy and step.get("platform") is not None:
+                follow_copy["platform"] = step.get("platform")
+            expanded.append(follow_copy)
+
+    return expanded
+
+
 # ---- App aliasing & per-task activation ----
 APP_ALIASES_IOS: Dict[str, str] = {
     "settings": "com.apple.Preferences",
@@ -1768,6 +1801,7 @@ def _run_tasks(
                     if page_path is None:
                         break
 
+            task_result["steps"] = _expand_steps_with_follow_ups(task_result["steps"])
             summary.append(task_result)
 
         if summary:
