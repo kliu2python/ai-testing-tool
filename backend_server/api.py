@@ -417,27 +417,31 @@ class RunRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _ensure_platform_or_targets(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        server = values.server
-        if isinstance(server, str):
-            server = server.strip()
-            values.server = server or None
+    def _ensure_platform_or_targets(self) -> "RunRequest":
+        # normalize server
+        if isinstance(self.server, str):
+            self.server = self.server.strip() or None
 
-        platform = values.platform
-        targets = values.targets
+        has_targets = bool(self.targets)
 
-        has_targets = bool(targets)
-
-        if not has_targets and platform is None:
+        # Require platform/server only when no explicit targets exist
+        if not has_targets and self.platform is None:
             raise ValueError(
                 "A platform must be provided when no automation targets are configured"
             )
 
-        if not has_targets and not values.server:
+        if not has_targets and not self.server:
             raise ValueError(
                 "An automation server must be provided when no targets are configured"
             )
-        return values
+
+        # Optional: backfill per-target server from top-level if omitted
+        if has_targets and self.server:
+            for t in self.targets:
+                if t.server is None:
+                    t.server = self.server
+
+        return self
 
 
 class RunResponse(BaseModel):
@@ -485,15 +489,12 @@ class PytestCodegenRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _ensure_source(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        summary = values.summary
-        summary_path = values.summary_path
-
-        if summary and summary_path:
+    def _ensure_source(self) -> "PytestCodegenRequest":
+        if self.summary and self.summary_path:
             raise ValueError("Provide either 'summary' or 'summary_path', not both")
-        if not summary and not summary_path:
+        if not self.summary and not self.summary_path:
             raise ValueError("Either 'summary' or 'summary_path' must be supplied")
-        return values
+        return self
 
 
 class PytestCodegenResponse(BaseModel):
