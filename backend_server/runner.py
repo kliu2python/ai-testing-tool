@@ -352,9 +352,9 @@ def generate_next_action(
 
     messages.append({"role": "user", "content": user_content})
 
-    api_key = os.getenv("OPENAI_VISION_API_KEY") or os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_VISION_BASE_URL") or os.getenv("OPENAI_BASE_URL")
-    model = os.getenv("OPENAI_VISION_MODEL") or os.getenv("OPENAI_MODEL")
+    api_key = os.getenv("OPENAI_API_KEY")
+    base_url = os.getenv("OPENAI_BASE_URL")
+    model = os.getenv("OPENAI_MODEL")
 
     if not api_key:
         raise RuntimeError("No API key configured for next action generation")
