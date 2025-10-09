@@ -1,4 +1,4 @@
-import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -7,7 +7,6 @@ import {
   CardContent,
   CircularProgress,
   Divider,
-  Grid,
   List,
   ListItem,
   ListItemButton,
@@ -17,8 +16,6 @@ import {
   Tooltip,
   Typography
 } from "@mui/material";
-
-import TextField from "@mui/material/TextField";
 
 import { apiRequest, formatPayload } from "../api";
 import type {
@@ -272,31 +269,6 @@ export default function CodeLibraryPanel({
     [selectedDetail]
   );
 
-  const handleScoreInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const parsed = Number.parseFloat(event.target.value);
-      if (Number.isNaN(parsed)) {
-        setScoreValue(0);
-        if (selectedDetail && selectedDetail.human_score == null) {
-          setScoreDirty(true);
-        }
-        return;
-      }
-      const clamped = Math.min(Math.max(parsed, -1), 1);
-      setScoreValue(clamped);
-      if (selectedDetail) {
-        const existing =
-          typeof selectedDetail.human_score === "number"
-            ? selectedDetail.human_score
-            : 0;
-        setScoreDirty(
-          selectedDetail.human_score == null || Math.abs(clamped - existing) > 1e-3
-        );
-      }
-    },
-    [selectedDetail]
-  );
-
   const handleSubmitScore = useCallback(async () => {
     if (!selectedId) {
       return;
@@ -522,37 +494,31 @@ export default function CodeLibraryPanel({
                     <Typography variant="body2" color="text.secondary">
                       {scoreHelpText}
                     </Typography>
-                    <Grid container spacing={2} alignItems="center">
-                      <Grid item xs>
-                        <Slider
-                          min={-1}
-                          max={1}
-                          step={0.05}
-                          marks={[
-                            { value: -1, label: "-1" },
-                            { value: 0, label: "0" },
-                            { value: 1, label: "1" }
-                          ]}
-                          value={scoreValue}
-                          onChange={handleScoreSliderChange}
-                          valueLabelDisplay="auto"
-                          valueLabelFormat={(value) => value.toFixed(2)}
-                          disabled={!selectedDetail}
-                          sx={{ px: 1 }}
-                        />
-                      </Grid>
-                      <Grid item>
-                        <TextField
-                          label="Score"
-                          type="number"
-                          value={scoreValue.toFixed(2)}
-                          onChange={handleScoreInputChange}
-                          inputProps={{ step: 0.05, min: -1, max: 1 }}
-                          size="small"
-                          sx={{ width: 96 }}
-                        />
-                      </Grid>
-                    </Grid>
+                    <Stack spacing={0.5}>
+                      <Slider
+                        min={-1}
+                        max={1}
+                        step={0.05}
+                        marks={[
+                          { value: -1, label: "-1" },
+                          { value: 0, label: "0" },
+                          { value: 1, label: "1" }
+                        ]}
+                        value={scoreValue}
+                        onChange={handleScoreSliderChange}
+                        valueLabelDisplay="auto"
+                        valueLabelFormat={(value) => value.toFixed(2)}
+                        disabled={!selectedDetail}
+                        sx={{ px: 1 }}
+                      />
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ alignSelf: "flex-end", fontVariantNumeric: "tabular-nums" }}
+                      >
+                        Current score: {scoreValue.toFixed(2)}
+                      </Typography>
+                    </Stack>
                     <Stack direction="row" spacing={1}>
                       <Button
                         variant="contained"
