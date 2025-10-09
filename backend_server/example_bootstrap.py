@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_SCORING_WEIGHTS: Dict[str, float] = {
     "tests_passed": 1.0,
+    "human_score": 0.8,
     "lint_errors": -0.5,
     "token_usage": -0.2,
     "compile_success": 0.3,
@@ -197,6 +198,24 @@ def score_metrics(metrics: Dict[str, float], weights: Dict[str, float]) -> float
     return sum(weights.get(key, 0.0) * float(metrics.get(key, 0.0)) for key in metrics)
 
 
+def score_human(value: Optional[float]) -> float:
+    """Normalise a user supplied score into the ``[-1.0, 1.0]`` range.
+
+    The returned value is stored as-is in the metrics payload; it is weighted when
+    ``score_metrics`` is invoked. Inputs that cannot be represented as floating
+    point numbers are ignored and treated as neutral feedback (``0.0``).
+    """
+
+    if value is None:
+        return 0.0
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        logger.debug("Ignoring invalid human score value: %s", value)
+        return 0.0
+    return max(min(numeric, 1.0), -1.0)
+
+
 def estimate_tokens(text: str) -> int:
     """Rudimentary token estimator based on whitespace splitting."""
 
@@ -249,6 +268,7 @@ def record_generation_result(
     task: GenerationTask,
     code: str,
     metrics: Optional[Dict[str, float]] = None,
+    human_score: Optional[float] = None,
     *,
     config: Optional[ExampleConfig] = None,
 ) -> Optional[Example]:
@@ -259,6 +279,10 @@ def record_generation_result(
         return None
 
     metrics = {key: float(value) for key, value in (metrics or {}).items()}
+    if "human_score" in metrics:
+        metrics["human_score"] = score_human(metrics["human_score"])
+    elif human_score is not None:
+        metrics["human_score"] = score_human(human_score)
     sanitized_code = sanitize_text(code or "")
     summary = summarize_code(sanitized_code)
     task_hash = task.ensure_hash()
