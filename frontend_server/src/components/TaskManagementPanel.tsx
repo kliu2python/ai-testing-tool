@@ -406,8 +406,11 @@ export default function TaskManagementPanel({
     setSteps(responseSteps);
   }
 
-  function handleSelectedSummaryChange(event: SelectChangeEvent) {
-    const nextIndex = Number(event.target.value);
+  function handleSelectedSummaryChange(
+    event: SelectChangeEvent<unknown>,
+    _child: unknown
+  ) {
+    const nextIndex = Number(event.target.value as string);
     setSelectedSummaryIndex(nextIndex);
     const entry = summaryEntries.find((item) => item.index === nextIndex);
     if (entry) {
@@ -924,8 +927,8 @@ export default function TaskManagementPanel({
               select
               label="Scenario"
               value={selectedSummaryIndex}
-              onChange={handleSelectedSummaryChange}
               sx={{ minWidth: { xs: "100%", sm: 240 } }}
+              SelectProps={{ onChange: handleSelectedSummaryChange }}
             >
               {summaryEntries.map((entry) => (
                 <MenuItem key={entry.index} value={entry.index}>

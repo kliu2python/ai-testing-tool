@@ -7,6 +7,7 @@ import {
   Card,
   CardContent,
   CardHeader,
+  Collapse,
   Divider,
   FormControlLabel,
   IconButton,
@@ -14,6 +15,8 @@ import {
   Stack,
   Switch,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography
 } from "@mui/material";
@@ -22,6 +25,7 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import TuneIcon from "@mui/icons-material/Tune";
 
 import { apiRequest, formatPayload } from "../api";
 import type {
@@ -139,13 +143,22 @@ export default function RunTaskForm({
   const [promptCopied, setPromptCopied] = useState(false);
   const [llmMode, setLlmMode] = useState<LlmMode>("auto");
   const [imageDescription, setImageDescription] = useState("");
+  const [showAdvancedTaskFields, setShowAdvancedTaskFields] = useState(false);
 
   const visionEnabled = llmMode === "vision";
+  const llmModeSelection: "auto" | "vision" = visionEnabled ? "vision" : "auto";
 
   const promptValue =
     promptOption === "custom"
       ? customPrompt
       : PROMPT_TEMPLATES[promptOption];
+
+  function handleLlmModeChange(
+    _event: unknown,
+    value: "auto" | "vision" | null
+  ) {
+    setLlmMode(value ?? "auto");
+  }
 
   useEffect(() => {
     setPromptCopied(false);
@@ -469,6 +482,31 @@ export default function RunTaskForm({
         </Stack>
       )}
 
+      <Stack spacing={1}>
+        <Typography variant="subtitle1" fontWeight={600}>
+          Model mode
+        </Typography>
+        <ToggleButtonGroup
+          value={llmModeSelection}
+          exclusive
+          onChange={handleLlmModeChange}
+          aria-label="Model mode selection"
+          size="small"
+        >
+          <ToggleButton value="auto" aria-label="Automatic text mode">
+            Auto
+          </ToggleButton>
+          <ToggleButton value="vision" aria-label="Vision mode">
+            Vision
+          </ToggleButton>
+        </ToggleButtonGroup>
+        <Typography variant="body2" color="text.secondary">
+          {visionEnabled
+            ? "Include an image description so the assistant can interpret the visual context."
+            : "Auto selects the best text-first model. Switch to Vision when you are working from screenshots or other imagery."}
+        </Typography>
+      </Stack>
+
       <Divider flexItem>
         <Stack
           direction={{ xs: "column", sm: "row" }}
@@ -479,18 +517,16 @@ export default function RunTaskForm({
           <Typography variant="subtitle1" fontWeight={600}>
             Task Details
           </Typography>
-          <FormControlLabel
-            control={
-              <Switch
-                color="secondary"
-                checked={visionEnabled}
-                onChange={(event) =>
-                  setLlmMode(event.target.checked ? "vision" : "auto")
-                }
-              />
+          <Button
+            variant="text"
+            startIcon={<TuneIcon />}
+            onClick={() =>
+              setShowAdvancedTaskFields((previous) => !previous)
             }
-            label="Vision mode"
-          />
+            sx={{ alignSelf: { xs: "flex-start", sm: "center" } }}
+          >
+            {showAdvancedTaskFields ? "Hide advanced fields" : "Show advanced fields"}
+          </Button>
         </Stack>
       </Divider>
 
@@ -550,24 +586,28 @@ export default function RunTaskForm({
                     multiline
                     minRows={4}
                   />
-                  <TextField
-                    label="Scope (optional)"
-                    value={task.scope}
-                    onChange={(event) =>
-                      handleTaskChange(task.id, { scope: event.target.value })
-                    }
-                    fullWidth
-                    placeholder="functional"
-                  />
-                  <TextField
-                    label="Target alias (optional)"
-                    value={task.target}
-                    onChange={(event) =>
-                      handleTaskChange(task.id, { target: event.target.value })
-                    }
-                    fullWidth
-                    helperText="Direct the task to a specific automation target."
-                  />
+                  <Collapse in={showAdvancedTaskFields} unmountOnExit>
+                    <Stack spacing={2} sx={{ pt: 1 }}>
+                      <TextField
+                        label="Scope (optional)"
+                        value={task.scope}
+                        onChange={(event) =>
+                          handleTaskChange(task.id, { scope: event.target.value })
+                        }
+                        fullWidth
+                        placeholder="functional"
+                      />
+                      <TextField
+                        label="Target alias (optional)"
+                        value={task.target}
+                        onChange={(event) =>
+                          handleTaskChange(task.id, { target: event.target.value })
+                        }
+                        fullWidth
+                        helperText="Direct the task to a specific automation target."
+                      />
+                    </Stack>
+                  </Collapse>
                   <TextField
                     label="Apps to activate (comma separated)"
                     value={task.apps}
