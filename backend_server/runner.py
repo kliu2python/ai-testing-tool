@@ -725,15 +725,25 @@ def draw_grid_with_labels(image_path, grid_size, output_path):
         except IOError:
             font = ImageFont.load_default()
 
+        line_padding = max(2, grid_size // 10)
+
         for x in range(label_space, new_width, grid_size):
-            line = ((x, label_space), (x, new_height))
+            start_y = label_space + line_padding
+            end_y = new_height - line_padding
+            if end_y <= start_y:
+                continue
+            line = ((x, start_y), (x, end_y))
             draw.line(line, fill=128)
             draw.text((x - 5, 5),
                       str((x - label_space) // grid_size),
                       fill="black", font=font)
 
         for y in range(label_space, new_height, grid_size):
-            line = ((label_space, y), (new_width, y))
+            start_x = label_space + line_padding
+            end_x = new_width - line_padding
+            if end_x <= start_x:
+                continue
+            line = ((start_x, y), (end_x, y))
             draw.line(line, fill=128)
             draw.text((5, y - 10),
                       str((y - label_space) // grid_size),
