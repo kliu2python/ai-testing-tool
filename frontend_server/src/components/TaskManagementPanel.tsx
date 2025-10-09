@@ -22,6 +22,7 @@ import {
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   TextField,
   Tooltip,
@@ -109,6 +110,11 @@ export default function TaskManagementPanel({
   const [editDialogSaving, setEditDialogSaving] = useState(false);
   const [expandedRunLists, setExpandedRunLists] = useState<Record<string, boolean>>({});
   const [openTaskMenus, setOpenTaskMenus] = useState<Record<string, boolean>>({});
+  const [lastUpdatedFilter, setLastUpdatedFilter] = useState<
+    "all" | "1h" | "24h" | "7d"
+  >("all");
+  const [runPages, setRunPages] = useState<Record<string, number>>({});
+  const [deletingGroup, setDeletingGroup] = useState<string | null>(null);
 
   const assetBase = useMemo(() => baseUrl.replace(/\/$/, ""), [baseUrl]);
   const selectedSummary = useMemo(
@@ -240,6 +246,10 @@ export default function TaskManagementPanel({
   }, []);
 
   useEffect(() => {
+    setRunPages({});
+  }, [groupedTasks, lastUpdatedFilter]);
+
+  useEffect(() => {
     if (!trimmedTaskId) {
       return;
     }
@@ -256,6 +266,7 @@ export default function TaskManagementPanel({
   }, [trimmedTaskId, groupedTasks]);
 
   const collapseThreshold = 10;
+  const tableRowsPerPage = 10;
 
   const shortDateFormatter = useMemo(
     () =>
@@ -305,6 +316,42 @@ export default function TaskManagementPanel({
       return "Started";
     }
     return "Queued";
+  }, []);
+
+  const filterByLastUpdated = useCallback(
+    (run: TaskGroupRun) => {
+      if (lastUpdatedFilter === "all") {
+        return true;
+      }
+      const timestamp = run.updated_at ?? run.created_at;
+      if (!timestamp) {
+        return false;
+      }
+      const parsed = Date.parse(timestamp);
+      if (Number.isNaN(parsed)) {
+        return false;
+      }
+      const now = Date.now();
+      const diff = now - parsed;
+      if (lastUpdatedFilter === "1h") {
+        return diff <= 60 * 60 * 1000;
+      }
+      if (lastUpdatedFilter === "24h") {
+        return diff <= 24 * 60 * 60 * 1000;
+      }
+      if (lastUpdatedFilter === "7d") {
+        return diff <= 7 * 24 * 60 * 60 * 1000;
+      }
+      return true;
+    },
+    [lastUpdatedFilter]
+  );
+
+  const handleRunPageChange = useCallback((taskName: string, newPage: number) => {
+    setRunPages((previous) => ({
+      ...previous,
+      [taskName]: newPage
+    }));
   }, []);
 
   const requireToken = useCallback((): string | null => {
@@ -527,44 +574,114 @@ export default function TaskManagementPanel({
     }
   }
 
-  async function deleteTask(targetId?: string) {
-    const trimmed = (targetId ?? taskId).trim();
-    if (!trimmed) {
-      onNotify({ message: "Enter a task ID", severity: "warning" });
-      return;
-    }
-    const authToken = requireToken();
-    if (!authToken) {
-      return;
-    }
-    setDeletingId(trimmed);
-    try {
-      const result = await apiRequest(
-        baseUrl,
-        "delete",
-        `/tasks/${trimmed}`,
-        undefined,
-        authToken
-      );
-      if (result.ok) {
-        onNotify({ message: "Task deleted", severity: "success" });
-        setStatusContent("");
-        setResultContent("");
-        setSteps([]);
-        if (taskId.trim() === trimmed) {
-          setTaskId("");
+  const deleteTask = useCallback(
+    async (
+      targetId?: string,
+      options?: { silent?: boolean; skipRefresh?: boolean }
+    ): Promise<boolean> => {
+      const trimmed = (targetId ?? taskId).trim();
+      if (!trimmed) {
+        if (!options?.silent) {
+          onNotify({ message: "Enter a task ID", severity: "warning" });
         }
-        await refreshTasks();
-      } else {
-        const message = result.error ?? `Request failed with ${result.status}`;
-        onNotify({ message, severity: "error" });
+        return false;
       }
-    } finally {
-      setDeletingId(null);
-    }
-  }
+      const authToken = requireToken();
+      if (!authToken) {
+        return false;
+      }
+      const selectedId = taskId.trim();
+      setDeletingId(trimmed);
+      try {
+        const result = await apiRequest(
+          baseUrl,
+          "delete",
+          `/tasks/${trimmed}`,
+          undefined,
+          authToken
+        );
+        if (result.ok) {
+          if (!options?.silent) {
+            onNotify({ message: "Task deleted", severity: "success" });
+          }
+          if (selectedId === trimmed) {
+            setStatusContent("");
+            setResultContent("");
+            setSteps([]);
+            setTaskId("");
+          }
+          if (!options?.skipRefresh) {
+            await refreshTasks({ silent: options?.silent });
+          }
+          return true;
+        }
+        const message = result.error ?? `Request failed with ${result.status}`;
+        if (!options?.silent) {
+          onNotify({ message, severity: "error" });
+        }
+        return false;
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [baseUrl, onNotify, refreshTasks, requireToken, taskId]
+  );
 
-  const disableActions = loading || Boolean(deletingId) || Boolean(rerunningName);
+  const deleteTaskGroup = useCallback(
+    async (taskName: string) => {
+      const group = groupedTasks.find((item) => item.task_name === taskName);
+      if (!group) {
+        onNotify({
+          message: `Unable to locate runs for ${taskName}`,
+          severity: "error"
+        });
+        return;
+      }
+      const identifiers = Array.from(
+        new Set(group.runs.map((run) => run.task_id).filter(Boolean))
+      );
+      if (identifiers.length === 0) {
+        onNotify({
+          message: "No runs available to delete for this task",
+          severity: "info"
+        });
+        return;
+      }
+      setDeletingGroup(taskName);
+      try {
+        const outcomes: boolean[] = [];
+        for (const id of identifiers) {
+          const result = await deleteTask(id, { silent: true, skipRefresh: true });
+          outcomes.push(result);
+        }
+        await refreshTasks({ silent: true });
+        const successCount = outcomes.filter(Boolean).length;
+        const failureCount = identifiers.length - successCount;
+        if (failureCount === 0) {
+          onNotify({
+            message: `Deleted ${successCount} run${successCount === 1 ? "" : "s"} for ${taskName}`,
+            severity: "success"
+          });
+        } else if (successCount > 0) {
+          onNotify({
+            message: `Deleted ${successCount} run${successCount === 1 ? "" : "s"} for ${taskName}. ${failureCount} failed.`,
+            severity: "warning"
+          });
+        } else {
+          onNotify({
+            message: `Failed to delete runs for ${taskName}`,
+            severity: "error"
+          });
+        }
+      } finally {
+        setDeletingGroup(null);
+      }
+    },
+    [deleteTask, groupedTasks, onNotify, refreshTasks]
+  );
+
+  const disableActions =
+    loading || Boolean(deletingId) || Boolean(rerunningName) || Boolean(deletingGroup);
 
   const editingInProgress =
     editDialogOpen && (editDialogLoading || editDialogSaving);
@@ -715,11 +832,33 @@ export default function TaskManagementPanel({
           sx={{ flexBasis: { lg: "45%" }, flexGrow: 1, minWidth: 0 }}
         >
           <Stack spacing={1.5}>
-            <Typography variant="h6">Queued Tasks</Typography>
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={1.5}
+              alignItems={{ xs: "flex-start", sm: "center" }}
+              justifyContent="space-between"
+            >
+              <Typography variant="h6">Queued Tasks</Typography>
+              <TextField
+                select
+                label="Last Updated"
+                value={lastUpdatedFilter}
+                size="small"
+                onChange={(event) =>
+                  setLastUpdatedFilter(event.target.value as typeof lastUpdatedFilter)
+                }
+                sx={{ minWidth: { xs: "100%", sm: 200 } }}
+              >
+                <MenuItem value="all">All</MenuItem>
+                <MenuItem value="1h">Last hour</MenuItem>
+                <MenuItem value="24h">Last 24 hours</MenuItem>
+                <MenuItem value="7d">Last 7 days</MenuItem>
+              </TextField>
+            </Stack>
             <Typography variant="body2" color="text.secondary">
               Expand a task name to reveal recent runs. Select a run chip to
-              populate the Task ID field or use the delete icon to remove
-              individual runs.
+              highlight it, display its Task ID below, or use the delete icon to
+              remove individual runs.
             </Typography>
             <Paper variant="outlined">
               {groupedTasks.length === 0 ? (
@@ -737,14 +876,15 @@ export default function TaskManagementPanel({
               ) : (
                 <List disablePadding aria-label="queued task list">
                   {groupedTasks.map((group, index) => {
-                    const isCollapsible = group.runs.length > collapseThreshold;
+                    const filteredRuns = group.runs.filter(filterByLastUpdated);
+                    const isCollapsible = filteredRuns.length > collapseThreshold;
                     const runListExpanded =
                       expandedRunLists[group.task_name] ?? false;
                     const visibleRuns =
                       isCollapsible && !runListExpanded
-                        ? group.runs.slice(0, collapseThreshold)
-                        : group.runs;
-                    const hiddenCount = group.runs.length - visibleRuns.length;
+                        ? filteredRuns.slice(0, collapseThreshold)
+                        : filteredRuns;
+                    const hiddenCount = filteredRuns.length - visibleRuns.length;
                     const menuOpen = openTaskMenus[group.task_name] ?? false;
                     const isSelectedGroup = group.runs.some(
                       (run) => run.task_id === trimmedTaskId
@@ -765,6 +905,16 @@ export default function TaskManagementPanel({
                     );
                     const chipRuns = partitionedRuns.chipRuns;
                     const tableRuns = partitionedRuns.tableRuns;
+                    const totalPages = Math.ceil(tableRuns.length / tableRowsPerPage);
+                    const currentPage = Math.min(
+                      runPages[group.task_name] ?? 0,
+                      Math.max(totalPages - 1, 0)
+                    );
+                    const paginatedRuns = tableRuns.slice(
+                      currentPage * tableRowsPerPage,
+                      currentPage * tableRowsPerPage + tableRowsPerPage
+                    );
+                    const isDeletingGroup = deletingGroup === group.task_name;
 
                     return (
                       <Box key={group.task_name}>
@@ -890,7 +1040,9 @@ export default function TaskManagementPanel({
                                             onClick={() => setTaskId(run.task_id)}
                                             onDelete={
                                               canDelete
-                                                ? () => deleteTask(run.task_id)
+                                                ? () => {
+                                                  void deleteTask(run.task_id);
+                                                }
                                                 : undefined
                                             }
                                             deleteIcon={
@@ -915,9 +1067,9 @@ export default function TaskManagementPanel({
                                         variant="outlined"
                                         sx={{ mr: 1, mb: 1, pointerEvents: "none" }}
                                       />
-                                    ) : null}
-                                  </Stack>
                                 ) : null}
+                              </Stack>
+                            ) : null}
                                 {tableRuns.length > 0 ? (
                                   <TableContainer
                                     component={Box}
@@ -935,13 +1087,14 @@ export default function TaskManagementPanel({
                                       <TableHead>
                                         <TableRow>
                                           <TableCell>Status</TableCell>
-                                          <TableCell>Last Updated</TableCell>
-                                          <TableCell>Task ID</TableCell>
+                                          <TableCell sx={{ width: "55%" }}>
+                                            Last Updated
+                                          </TableCell>
                                           <TableCell align="right">Actions</TableCell>
                                         </TableRow>
                                       </TableHead>
                                       <TableBody>
-                                        {tableRuns.map((run) => {
+                                        {paginatedRuns.map((run) => {
                                           const statusLabel = statusMeta[run.status].label;
                                           const timestamp = run.updated_at ?? run.created_at;
                                           const shortTimestamp =
@@ -992,14 +1145,6 @@ export default function TaskManagementPanel({
                                                   </Stack>
                                                 </Tooltip>
                                               </TableCell>
-                                              <TableCell>
-                                                <Typography
-                                                  variant="body2"
-                                                  sx={{ fontFamily: "Roboto Mono, monospace" }}
-                                                >
-                                                  {run.task_id}
-                                                </Typography>
-                                              </TableCell>
                                               <TableCell align="right">
                                                 <Stack
                                                   direction="row"
@@ -1040,7 +1185,29 @@ export default function TaskManagementPanel({
                                         })}
                                       </TableBody>
                                     </Table>
+                                    {totalPages > 1 ? (
+                                      <TablePagination
+                                        component="div"
+                                        rowsPerPageOptions={[tableRowsPerPage]}
+                                        count={tableRuns.length}
+                                        rowsPerPage={tableRowsPerPage}
+                                        page={currentPage}
+                                        onPageChange={(_event, newPage) =>
+                                          handleRunPageChange(group.task_name, newPage)
+                                        }
+                                        onRowsPerPageChange={() => {
+                                          /* rows per page is fixed */
+                                        }}
+                                        showFirstButton
+                                        showLastButton
+                                      />
+                                    ) : null}
                                   </TableContainer>
+                                ) : null}
+                                {filteredRuns.length === 0 ? (
+                                  <Typography variant="body2" color="text.secondary">
+                                    No runs match the selected filter.
+                                  </Typography>
                                 ) : null}
                                 {isCollapsible ? (
                                   <Stack spacing={0.5}>
@@ -1050,7 +1217,7 @@ export default function TaskManagementPanel({
                                         color="text.secondary"
                                       >
                                         Showing first {visibleRuns.length} of {" "}
-                                        {group.runs.length} runs.
+                                        {filteredRuns.length} runs.
                                       </Typography>
                                     ) : null}
                                     <Button
@@ -1068,7 +1235,7 @@ export default function TaskManagementPanel({
                                     >
                                       {runListExpanded
                                         ? "Show fewer runs"
-                                        : `Show all ${group.runs.length} runs`}
+                                        : `Show all ${filteredRuns.length} runs`}
                                     </Button>
                                   </Stack>
                                 ) : null}
@@ -1098,6 +1265,18 @@ export default function TaskManagementPanel({
                                 >
                                   Rerun
                                 </Button>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  color="error"
+                                  startIcon={<DeleteForeverIcon fontSize="small" />}
+                                  onClick={() => {
+                                    void deleteTaskGroup(group.task_name);
+                                  }}
+                                  disabled={disableActions || isDeletingGroup}
+                                >
+                                  Delete
+                                </Button>
                               </Stack>
                             </Stack>
                           </Box>
@@ -1108,13 +1287,26 @@ export default function TaskManagementPanel({
                 </List>
               )}
             </Paper>
+            <Paper variant="outlined" sx={{ p: 2 }}>
+              {trimmedTaskId ? (
+                <Stack spacing={0.75}>
+                  <Typography variant="subtitle2" color="text.secondary">
+                    Selected Task ID
+                  </Typography>
+                  <Typography
+                    variant="body2"
+                    sx={{ fontFamily: "Roboto Mono, monospace", wordBreak: "break-all" }}
+                  >
+                    {trimmedTaskId}
+                  </Typography>
+                </Stack>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  Select a task run to display its ID.
+                </Typography>
+              )}
+            </Paper>
           </Stack>
-          <TextField
-            label="Task ID"
-            value={taskId}
-            onChange={(event) => setTaskId(event.target.value)}
-            fullWidth
-          />
           <Stack
             direction={{ xs: "column", sm: "row" }}
             spacing={2}
@@ -1124,7 +1316,7 @@ export default function TaskManagementPanel({
               startIcon={<InsightsIcon />}
               variant="contained"
               onClick={loadStatus}
-              disabled={disableActions}
+              disabled={disableActions || !trimmedTaskId}
               sx={{ minWidth: { sm: 164 } }}
             >
               Get Task Status
@@ -1133,7 +1325,7 @@ export default function TaskManagementPanel({
               variant="contained"
               color="secondary"
               onClick={loadResult}
-              disabled={disableActions}
+              disabled={disableActions || !trimmedTaskId}
               sx={{ minWidth: { sm: 164 } }}
             >
               Get Task Result
