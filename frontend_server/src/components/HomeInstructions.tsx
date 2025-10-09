@@ -75,7 +75,7 @@ export default function HomeInstructions() {
                   </Typography>
                 </Stack>
                 <Typography variant="body2" color="text.secondary">
-                  Toggle vision mode from the Run Tasks form when you want the assistant to reason about uploaded imagery or screen captures. Provide a concise description of the scene so the model can infer layout, colours, and critical UI states.
+                  Vision support now turns on automatically when your task descriptions mention screenshots, colours, words on screen, or other visual checks. The assistant will describe captured imagery for you whenever those cues are detected—no manual toggle or scene summary required.
                 </Typography>
               </Stack>
               <Stack spacing={1.5}>

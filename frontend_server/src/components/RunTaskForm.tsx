@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Accordion,
   AccordionDetails,
   AccordionSummary,
@@ -15,8 +16,6 @@ import {
   Stack,
   Switch,
   TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Tooltip,
   Typography
 } from "@mui/material";
@@ -30,7 +29,6 @@ import TuneIcon from "@mui/icons-material/Tune";
 import { apiRequest, formatPayload } from "../api";
 import type {
   AutomationTaskDefinition,
-  LlmMode,
   NotificationState,
   RunResponse,
   RunTaskPayload,
@@ -64,6 +62,27 @@ const PROMPT_TEMPLATES: Record<Exclude<PromptOption, "custom">, string> = {
   default: defaultPrompt,
   web: defaultPrompt
 };
+
+const VISION_PATTERNS: RegExp[] = [
+  /\bimage\b/i,
+  /\bvisual\b/i,
+  /\bscreenshot\b/i,
+  /\bpicture\b/i,
+  /\bphoto\b/i,
+  /\bicon\b/i,
+  /\bdiagram\b/i,
+  /\bgraph\b/i,
+  /\bchart\b/i,
+  /\bcamera\b/i,
+  /\bocr\b/i,
+  /\bscan\b/i,
+  /\bverify(?:ing)?\s+(?:the\s+)?(?:output|display|ui|screen)\b/i,
+  /\bverify(?:ing)?\s+(?:that\s+)?(?:text|words?)\b/i,
+  /\bcolou?rs?\b/i,
+  /\boverlap(?:ping)?\b/i,
+  /\bsee\b/i,
+  /\bwords?\b/i
+];
 
 const PLATFORM_SERVERS: Record<PlatformOption, string> = {
   android: "http://10.160.24.110:8080/wd/hub",
@@ -141,24 +160,29 @@ export default function RunTaskForm({
   const [response, setResponse] = useState("");
   const [repeatCount, setRepeatCount] = useState(1);
   const [promptCopied, setPromptCopied] = useState(false);
-  const [llmMode, setLlmMode] = useState<LlmMode>("auto");
-  const [imageDescription, setImageDescription] = useState("");
   const [showAdvancedTaskFields, setShowAdvancedTaskFields] = useState(false);
 
-  const visionEnabled = llmMode === "vision";
-  const llmModeSelection: "auto" | "vision" = visionEnabled ? "vision" : "auto";
+  const shouldUseVision = useMemo(() => {
+    return taskForms.some((task) => {
+      const fragments: string[] = [];
+      if (task.name) {
+        fragments.push(task.name);
+      }
+      if (task.details) {
+        fragments.push(task.details);
+      }
+      if (task.scope) {
+        fragments.push(task.scope);
+      }
+      const combined = fragments.join(" ");
+      return VISION_PATTERNS.some((pattern) => pattern.test(combined));
+    });
+  }, [taskForms]);
 
   const promptValue =
     promptOption === "custom"
       ? customPrompt
       : PROMPT_TEMPLATES[promptOption];
-
-  function handleLlmModeChange(
-    _event: unknown,
-    value: "auto" | "vision" | null
-  ) {
-    setLlmMode(value ?? "auto");
-  }
 
   useEffect(() => {
     setPromptCopied(false);
@@ -376,20 +400,8 @@ export default function RunTaskForm({
       reports_folder: reportsFolder,
       debug,
       repeat: repeatCount,
-      llm_mode: llmMode
+      llm_mode: "auto"
     };
-
-    if (llmMode === "vision") {
-      const trimmedDescription = imageDescription.trim();
-      if (!trimmedDescription) {
-        onNotify({
-          message: "Provide an image description when running in vision mode",
-          severity: "warning"
-        });
-        return;
-      }
-      payload.image_description = trimmedDescription;
-    }
 
     if (targetForms.length === 0) {
       if (!trimmedServer) {
@@ -484,27 +496,13 @@ export default function RunTaskForm({
 
       <Stack spacing={1}>
         <Typography variant="subtitle1" fontWeight={600}>
-          Model mode
+          Vision assistance
         </Typography>
-        <ToggleButtonGroup
-          value={llmModeSelection}
-          exclusive
-          onChange={handleLlmModeChange}
-          aria-label="Model mode selection"
-          size="small"
-        >
-          <ToggleButton value="auto" aria-label="Automatic text mode">
-            Auto
-          </ToggleButton>
-          <ToggleButton value="vision" aria-label="Vision mode">
-            Vision
-          </ToggleButton>
-        </ToggleButtonGroup>
-        <Typography variant="body2" color="text.secondary">
-          {visionEnabled
-            ? "Include an image description so the assistant can interpret the visual context."
-            : "Auto selects the best text-first model. Switch to Vision when you are working from screenshots or other imagery."}
-        </Typography>
+        <Alert severity="info">
+          {shouldUseVision
+            ? "Vision support will be enabled automatically for this run based on your task descriptions. Screenshots will be described for you when the assistant detects visual verification steps."
+            : "Vision support turns on automatically when tasks mention screenshots, colours, words on screen, or similar visual checks. No manual toggle or description is required."}
+        </Alert>
       </Stack>
 
       <Divider flexItem>
@@ -529,18 +527,6 @@ export default function RunTaskForm({
           </Button>
         </Stack>
       </Divider>
-
-      {visionEnabled ? (
-        <TextField
-          label="Image Description"
-          value={imageDescription}
-          onChange={(event) => setImageDescription(event.target.value)}
-          fullWidth
-          multiline
-          minRows={3}
-          helperText="Describe the image context for the vision-enabled run."
-        />
-      ) : null}
 
       <Stack spacing={2}>
         {taskForms.map((task, index) => {

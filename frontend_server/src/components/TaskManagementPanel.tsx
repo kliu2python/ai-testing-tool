@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Box,
   Button,
   Card,
@@ -657,6 +658,9 @@ export default function TaskManagementPanel({
           Refresh Tasks
         </Button>
       </Stack>
+      <Alert severity="info">
+        Vision support is triggered automatically whenever queued tasks mention screenshots, colours, words on screen, or other visual checks. There is no separate button to enable it—just describe the UI cues in your task details.
+      </Alert>
       <Stack spacing={1.5}>
         <Typography variant="h6">Queued Tasks</Typography>
         <Typography variant="body2" color="text.secondary">

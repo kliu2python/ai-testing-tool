@@ -180,20 +180,26 @@ def _image_data_url(image_path: str) -> Optional[str]:
 # LLM: next action generation
 # -----------------------------
 _LLM_MODES = {"auto", "text", "vision"}
-_VISION_KEYWORDS = {
-    "image",
-    "visual",
-    "screenshot",
-    "picture",
-    "photo",
-    "icon",
-    "diagram",
-    "graph",
-    "chart",
-    "camera",
-    "ocr",
-    "scan",
-}
+_VISION_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bimage\b", re.IGNORECASE),
+    re.compile(r"\bvisual\b", re.IGNORECASE),
+    re.compile(r"\bscreenshot\b", re.IGNORECASE),
+    re.compile(r"\bpicture\b", re.IGNORECASE),
+    re.compile(r"\bphoto\b", re.IGNORECASE),
+    re.compile(r"\bicon\b", re.IGNORECASE),
+    re.compile(r"\bdiagram\b", re.IGNORECASE),
+    re.compile(r"\bgraph\b", re.IGNORECASE),
+    re.compile(r"\bchart\b", re.IGNORECASE),
+    re.compile(r"\bcamera\b", re.IGNORECASE),
+    re.compile(r"\bocr\b", re.IGNORECASE),
+    re.compile(r"\bscan\b", re.IGNORECASE),
+    re.compile(r"\bverify(?:ing)?\s+(?:the\s+)?(?:output|display|ui|screen)\b", re.IGNORECASE),
+    re.compile(r"\bverify(?:ing)?\s+(?:that\s+)?(?:text|words?)\b", re.IGNORECASE),
+    re.compile(r"\bcolou?rs?\b", re.IGNORECASE),
+    re.compile(r"\boverlap(?:ping)?\b", re.IGNORECASE),
+    re.compile(r"\bsee\b", re.IGNORECASE),
+    re.compile(r"\bwords?\b", re.IGNORECASE),
+)
 
 
 def _normalise_llm_mode(mode: Optional[str]) -> str:
@@ -221,8 +227,8 @@ def _task_needs_vision(task: Dict[str, Any]) -> bool:
                     if isinstance(value, str):
                         text_fragments.append(value)
 
-    combined = " ".join(text_fragments).lower()
-    return any(keyword in combined for keyword in _VISION_KEYWORDS)
+    combined = " ".join(text_fragments)
+    return any(pattern.search(combined) for pattern in _VISION_PATTERNS)
 
 
 def _resolve_task_llm_mode(preference: Optional[str], task: Dict[str, Any]) -> str:
