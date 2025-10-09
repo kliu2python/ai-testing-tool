@@ -7,7 +7,6 @@ import {
   CardHeader,
   CardMedia,
   Chip,
-  Divider,
   Paper,
   Stack,
   Table,
@@ -661,364 +660,397 @@ export default function TaskManagementPanel({
       <Alert severity="info">
         Vision support is triggered automatically whenever queued tasks mention screenshots, colours, words on screen, or other visual checks. There is no separate button to enable it—just describe the UI cues in your task details.
       </Alert>
-      <Stack spacing={1.5}>
-        <Typography variant="h6">Queued Tasks</Typography>
-        <Typography variant="body2" color="text.secondary">
-          Click a task chip to populate the Task ID field or use the delete icon
-          to remove individual runs.
-        </Typography>
-        <TableContainer component={Paper} variant="outlined">
-          <Table size="small" aria-label="queued tasks">
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ width: { xs: "35%", md: "30%" } }}>
-                  Task Name
-                </TableCell>
-                <TableCell>Queued Runs</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {groupedTasks.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={3}>
-                    <Typography
-                      variant="body2"
-                      color="text.secondary"
-                      align="center"
-                      sx={{ py: 2 }}
-                    >
-                      {tasks
-                        ? "No tasks available. Refresh again once new runs are queued."
-                        : "Refresh to load your recent automation tasks."}
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                groupedTasks.map((group) => (
-                  <TableRow
-                    key={group.task_name}
-                    hover
-                    sx={{ verticalAlign: "top" }}
-                  >
-                    <TableCell>
-                      <Stack spacing={0.5}>
-                        <Typography variant="subtitle2" fontWeight={600}>
-                          {group.task_name}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {group.runs.length} run
-                          {group.runs.length === 1 ? "" : "s"}
-                        </Typography>
-                      </Stack>
+      <Stack
+        direction={{ xs: "column", lg: "row" }}
+        spacing={3}
+        alignItems="stretch"
+      >
+        <Stack
+          spacing={3}
+          sx={{ flexBasis: { lg: "45%" }, flexGrow: 1, minWidth: 0 }}
+        >
+          <Stack spacing={1.5}>
+            <Typography variant="h6">Queued Tasks</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Click a task chip to populate the Task ID field or use the delete
+              icon to remove individual runs.
+            </Typography>
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small" aria-label="queued tasks">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ width: { xs: "35%", md: "30%" } }}>
+                      Task Name
                     </TableCell>
-                    <TableCell>
-                      {(() => {
-                        const isCollapsible = group.runs.length > collapseThreshold;
-                        const isExpanded = expandedTasks[group.task_name] ?? false;
-                        const visibleRuns =
-                          isCollapsible && !isExpanded
-                            ? group.runs.slice(0, collapseThreshold)
-                            : group.runs;
-                        const hiddenCount = group.runs.length - visibleRuns.length;
-
-                        return (
-                          <Stack spacing={1} alignItems="flex-start">
-                            <Stack direction="row" spacing={1} flexWrap="wrap">
-                              {visibleRuns.map((run) => {
-                                  const statusLabel = statusMeta[run.status].label;
-                                  const timestamp = run.updated_at ?? run.created_at;
-                                  const shortTimestamp =
-                                    formatTimestamp(timestamp) ?? "Unknown time";
-                                  const longTimestamp =
-                            formatTimestamp(timestamp, { long: true }) ??
-                            "Unknown time";
-                          const timingPrefix = timestampPrefix(run.status);
-                          const label = [
-                            statusLabel,
-                            shortTimestamp,
-                            run.task_id
-                          ].join(" • ");
-                          const isSelected = taskId.trim() === run.task_id;
-                          const canDelete = !disableActions && deletingId !== run.task_id;
-                                  return (
-                                    <Tooltip
-                                      key={run.task_id}
-                                      arrow
-                                      title={
-                                        <Stack spacing={0.5}>
-                                          <Typography
-                                            variant="caption"
-                                            component="span"
-                                            color="inherit"
-                                          >
-                                            Status: {statusLabel}
-                                          </Typography>
-                                          <Typography
-                                            variant="caption"
-                                            component="span"
-                                            color="inherit"
-                                          >
-                                            {timingPrefix}: {longTimestamp}
-                                          </Typography>
-                                          <Typography
-                                            variant="caption"
-                                            component="span"
-                                            color="inherit"
-                                          >
-                                            Task ID: {run.task_id}
-                                          </Typography>
-                                          <Typography
-                                            variant="caption"
-                                            component="span"
-                                            color="inherit"
-                                          >
-                                            Click to select or delete.
-                                          </Typography>
-                                        </Stack>
-                                      }
-                                    >
-                                      <Chip
-                                        label={label}
-                                        color={statusMeta[run.status].color}
-                                        size="small"
-                                        variant={
-                                          isSelected || run.status === "pending"
-                                            ? "outlined"
-                                            : "filled"
-                                        }
-                                        onClick={() => setTaskId(run.task_id)}
-                                        onDelete={
-                                          canDelete
-                                            ? () => deleteTask(run.task_id)
-                                            : undefined
-                                        }
-                                        deleteIcon={
-                                          <DeleteForeverIcon fontSize="small" />
-                                        }
-                                        sx={{
-                                          mr: 1,
-                                          mb: 1,
-                                          borderStyle: isSelected ? "solid" : undefined
-                                        }}
-                                      />
-                                    </Tooltip>
-                                  );
-                                })}
-                              {isCollapsible && hiddenCount > 0 && !isExpanded ? (
-                                <Chip
-                                  label={`+${hiddenCount} more`}
-                                  size="small"
-                                  color="default"
-                                  variant="outlined"
-                                  sx={{ mr: 1, mb: 1, pointerEvents: "none" }}
-                                />
-                              ) : null}
-                            </Stack>
-                            {isCollapsible ? (
-                              <Stack spacing={0.5}>
-                                {!isExpanded ? (
-                                  <Typography
-                                    variant="caption"
-                                    color="text.secondary"
-                                  >
-                                    Showing first {visibleRuns.length} of {group.runs.length}{" "}
-                                    runs.
-                                  </Typography>
-                                ) : null}
-                                <Button
-                                  size="small"
-                                  variant="text"
-                                  startIcon={
-                                    isExpanded ? (
-                                      <ExpandLessIcon fontSize="small" />
-                                    ) : (
-                                      <ExpandMoreIcon fontSize="small" />
-                                    )
-                                  }
-                                  onClick={() => toggleTaskRuns(group.task_name)}
-                                  sx={{ alignSelf: "flex-start" }}
-                                >
-                                  {isExpanded
-                                    ? "Show fewer runs"
-                                    : `Show all ${group.runs.length} runs`}
-                                </Button>
-                              </Stack>
-                            ) : null}
-                          </Stack>
-                        );
-                      })()}
-                    </TableCell>
-                    <TableCell align="right">
-                      <Stack
-                        direction="row"
-                        spacing={1}
-                        justifyContent="flex-end"
-                      >
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          startIcon={<EditIcon fontSize="small" />}
-                          onClick={() => openEditDialog(group.task_name)}
-                          disabled={disableModifyButton}
-                        >
-                          Modify
-                        </Button>
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          startIcon={<ReplayIcon fontSize="small" />}
-                          onClick={() => rerunTask(group.task_name)}
-                          disabled={
-                            disableActions || rerunningName === group.task_name
-                          }
-                        >
-                          Rerun
-                        </Button>
-                      </Stack>
-                    </TableCell>
+                    <TableCell>Queued Runs</TableCell>
+                    <TableCell align="right">Actions</TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Stack>
-      <TextField
-        label="Task ID"
-        value={taskId}
-        onChange={(event) => setTaskId(event.target.value)}
-        fullWidth
-      />
-      <Stack direction="row" spacing={2}>
-        <Button
-          startIcon={<InsightsIcon />}
-          variant="contained"
-          onClick={loadStatus}
-          disabled={disableActions}
-        >
-          Get Task Status
-        </Button>
-        <Button
-          variant="contained"
-          color="secondary"
-          onClick={loadResult}
-          disabled={disableActions}
-        >
-          Get Task Result
-        </Button>
-        <Button
-          variant="outlined"
-          color="inherit"
-          startIcon={<DeleteOutlineIcon />}
-          onClick={clearTaskOutputs}
-          disabled={!hasTaskOutputs}
-        >
-          Clear Results
-        </Button>
-      </Stack>
-      <JsonOutput title="Status" content={statusContent} />
-      <JsonOutput title="Result" content={resultContent} />
-      {summaryEntries.length > 0 ? (
-        <Stack spacing={2}>
-          <Typography variant="h6">Generate Pytest Code</Typography>
+                </TableHead>
+                <TableBody>
+                  {groupedTasks.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={3}>
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          align="center"
+                          sx={{ py: 2 }}
+                        >
+                          {tasks
+                            ? "No tasks available. Refresh again once new runs are queued."
+                            : "Refresh to load your recent automation tasks."}
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    groupedTasks.map((group) => (
+                      <TableRow
+                        key={group.task_name}
+                        hover
+                        sx={{ verticalAlign: "top" }}
+                      >
+                        <TableCell>
+                          <Stack spacing={0.5}>
+                            <Typography variant="subtitle2" fontWeight={600}>
+                              {group.task_name}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {group.runs.length} run
+                              {group.runs.length === 1 ? "" : "s"}
+                            </Typography>
+                          </Stack>
+                        </TableCell>
+                        <TableCell>
+                          {(() => {
+                            const isCollapsible =
+                              group.runs.length > collapseThreshold;
+                            const isExpanded =
+                              expandedTasks[group.task_name] ?? false;
+                            const visibleRuns =
+                              isCollapsible && !isExpanded
+                                ? group.runs.slice(0, collapseThreshold)
+                                : group.runs;
+                            const hiddenCount =
+                              group.runs.length - visibleRuns.length;
+
+                            return (
+                              <Stack spacing={1} alignItems="flex-start">
+                                <Stack direction="row" spacing={1} flexWrap="wrap">
+                                  {visibleRuns.map((run) => {
+                                      const statusLabel =
+                                        statusMeta[run.status].label;
+                                      const timestamp =
+                                        run.updated_at ?? run.created_at;
+                                      const shortTimestamp =
+                                        formatTimestamp(timestamp) ?? "Unknown time";
+                                      const longTimestamp =
+                                        formatTimestamp(timestamp, { long: true }) ??
+                                        "Unknown time";
+                                      const timingPrefix = timestampPrefix(run.status);
+                                      const label = [
+                                        statusLabel,
+                                        shortTimestamp,
+                                        run.task_id
+                                      ].join(" • ");
+                                      const isSelected = taskId.trim() === run.task_id;
+                                      const canDelete =
+                                        !disableActions && deletingId !== run.task_id;
+                                      return (
+                                        <Tooltip
+                                          key={run.task_id}
+                                          arrow
+                                          title={
+                                            <Stack spacing={0.5}>
+                                              <Typography
+                                                variant="caption"
+                                                component="span"
+                                                color="inherit"
+                                              >
+                                                Status: {statusLabel}
+                                              </Typography>
+                                              <Typography
+                                                variant="caption"
+                                                component="span"
+                                                color="inherit"
+                                              >
+                                                {timingPrefix}: {longTimestamp}
+                                              </Typography>
+                                              <Typography
+                                                variant="caption"
+                                                component="span"
+                                                color="inherit"
+                                              >
+                                                Task ID: {run.task_id}
+                                              </Typography>
+                                              <Typography
+                                                variant="caption"
+                                                component="span"
+                                                color="inherit"
+                                              >
+                                                Click to select or delete.
+                                              </Typography>
+                                            </Stack>
+                                          }
+                                        >
+                                          <Chip
+                                            label={label}
+                                            color={statusMeta[run.status].color}
+                                            size="small"
+                                            variant={
+                                              isSelected || run.status === "pending"
+                                                ? "outlined"
+                                                : "filled"
+                                            }
+                                            onClick={() => setTaskId(run.task_id)}
+                                            onDelete={
+                                              canDelete
+                                                ? () => deleteTask(run.task_id)
+                                                : undefined
+                                            }
+                                            deleteIcon={
+                                              <DeleteForeverIcon fontSize="small" />
+                                            }
+                                            sx={{
+                                              mr: 1,
+                                              mb: 1,
+                                              borderStyle: isSelected
+                                                ? "solid"
+                                                : undefined
+                                            }}
+                                          />
+                                        </Tooltip>
+                                      );
+                                    })}
+                                  {isCollapsible && hiddenCount > 0 && !isExpanded ? (
+                                    <Chip
+                                      label={`+${hiddenCount} more`}
+                                      size="small"
+                                      color="default"
+                                      variant="outlined"
+                                      sx={{ mr: 1, mb: 1, pointerEvents: "none" }}
+                                    />
+                                  ) : null}
+                                </Stack>
+                                {isCollapsible ? (
+                                  <Stack spacing={0.5}>
+                                    {!isExpanded ? (
+                                      <Typography
+                                        variant="caption"
+                                        color="text.secondary"
+                                      >
+                                        Showing first {visibleRuns.length} of {" "}
+                                        {group.runs.length} runs.
+                                      </Typography>
+                                    ) : null}
+                                    <Button
+                                      size="small"
+                                      variant="text"
+                                      startIcon={
+                                        isExpanded ? (
+                                          <ExpandLessIcon fontSize="small" />
+                                        ) : (
+                                          <ExpandMoreIcon fontSize="small" />
+                                        )
+                                      }
+                                      onClick={() => toggleTaskRuns(group.task_name)}
+                                      sx={{ alignSelf: "flex-start" }}
+                                    >
+                                      {isExpanded
+                                        ? "Show fewer runs"
+                                        : `Show all ${group.runs.length} runs`}
+                                    </Button>
+                                  </Stack>
+                                ) : null}
+                              </Stack>
+                            );
+                          })()}
+                        </TableCell>
+                        <TableCell align="right">
+                          <Stack
+                            direction="row"
+                            spacing={1}
+                            justifyContent="flex-end"
+                          >
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              startIcon={<EditIcon fontSize="small" />}
+                              onClick={() => openEditDialog(group.task_name)}
+                              disabled={disableModifyButton}
+                            >
+                              Modify
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              startIcon={<ReplayIcon fontSize="small" />}
+                              onClick={() => rerunTask(group.task_name)}
+                              disabled={
+                                disableActions || rerunningName === group.task_name
+                              }
+                            >
+                              Rerun
+                            </Button>
+                          </Stack>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Stack>
+          <TextField
+            label="Task ID"
+            value={taskId}
+            onChange={(event) => setTaskId(event.target.value)}
+            fullWidth
+          />
           <Stack
             direction={{ xs: "column", sm: "row" }}
             spacing={2}
-            alignItems={{ xs: "stretch", sm: "flex-end" }}
+            alignItems={{ xs: "stretch", sm: "center" }}
           >
-            <TextField
-              select
-              label="Scenario"
-              value={selectedSummaryIndex}
-              sx={{ minWidth: { xs: "100%", sm: 240 } }}
-              SelectProps={{ onChange: handleSelectedSummaryChange }}
+            <Button
+              startIcon={<InsightsIcon />}
+              variant="contained"
+              onClick={loadStatus}
+              disabled={disableActions}
+              sx={{ minWidth: { sm: 164 } }}
             >
-              {summaryEntries.map((entry) => (
-                <MenuItem key={entry.index} value={entry.index}>
-                  {entry.label}
-                </MenuItem>
-              ))}
-            </TextField>
+              Get Task Status
+            </Button>
             <Button
               variant="contained"
-              startIcon={<CodeIcon />}
-              disabled={disableActions || codegenLoading}
-              onClick={() => {
-                void generatePytestCode();
-              }}
+              color="secondary"
+              onClick={loadResult}
+              disabled={disableActions}
+              sx={{ minWidth: { sm: 164 } }}
             >
-              {codegenLoading ? "Generating..." : "Generate Pytest Code"}
+              Get Task Result
+            </Button>
+            <Button
+              variant="outlined"
+              color="inherit"
+              startIcon={<DeleteOutlineIcon />}
+              onClick={clearTaskOutputs}
+              disabled={!hasTaskOutputs}
+              sx={{ minWidth: { sm: 164 } }}
+            >
+              Clear Results
             </Button>
           </Stack>
-          {codegenResponse ? (
-            <Stack spacing={0.5}>
-              {Number.isFinite(codegenResponse.record_id) ? (
-                <Typography variant="body2" color="text.secondary">
-                  Entry ID: {codegenResponse.record_id}
-                </Typography>
-              ) : null}
-              <Typography variant="body2" color="text.secondary">
-                Model: {codegenResponse.model}
-              </Typography>
-              {codegenResponse.function_name ? (
-                <Typography variant="body2" color="text.secondary">
-                  Test Function: {codegenResponse.function_name}
-                </Typography>
-              ) : null}
-            </Stack>
-          ) : (
-            <Typography variant="body2" color="text.secondary">
-              Use the generator to convert the selected summary into executable
-              pytest code.
-            </Typography>
-          )}
-          <JsonOutput
-            title="Generated Pytest Code"
-            content={codegenResponse?.code ?? ""}
-            minHeight={320}
-          />
         </Stack>
-      ) : resultPayload ? (
-        <Typography variant="body2" color="text.secondary">
-          The retrieved result does not include summary data required for code
-          generation.
-        </Typography>
-      ) : null}
-      <Divider />
-      <Stack spacing={2}>
-        <Typography variant="h6">Execution Steps</Typography>
-        {steps.length === 0 ? (
-          <Typography variant="body2" color="text.secondary">
-            {resultContent
-              ? "No screenshots were reported for this task."
-              : "Run a task result query to view captured screenshots."}
-          </Typography>
-        ) : (
+        <Stack
+          spacing={3}
+          sx={{ flexBasis: { lg: "55%" }, flexGrow: 1, minWidth: 0 }}
+        >
           <Stack spacing={2}>
-            {steps.map((step) => (
-              <Card key={`${taskId}-${step.index}`} variant="outlined">
-                <CardHeader
-                  title={`Step ${step.index + 1}`}
-                  subheader={step.filename}
-                />
-                <Box px={2} pb={2}>
-                  <CardMedia
-                    component="img"
-                    image={resolveAssetUrl(assetBase, step.image_url)}
-                    alt={`Step ${step.index + 1} screenshot`}
-                    sx={{
-                      maxHeight: 420,
-                      borderRadius: 1,
-                      border: (theme) => `1px solid ${theme.palette.divider}`,
-                      objectFit: "contain"
-                    }}
-                  />
-                </Box>
-              </Card>
-            ))}
+            <Typography variant="h6">Task Details</Typography>
+            <JsonOutput title="Status" content={statusContent} />
+            <JsonOutput title="Result" content={resultContent} />
           </Stack>
-        )}
+          {summaryEntries.length > 0 ? (
+            <Stack spacing={2}>
+              <Typography variant="h6">Generate Pytest Code</Typography>
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                spacing={2}
+                alignItems={{ xs: "stretch", sm: "flex-end" }}
+              >
+                <TextField
+                  select
+                  label="Scenario"
+                  value={selectedSummaryIndex}
+                  sx={{ minWidth: { xs: "100%", sm: 240 } }}
+                  SelectProps={{ onChange: handleSelectedSummaryChange }}
+                >
+                  {summaryEntries.map((entry) => (
+                    <MenuItem key={entry.index} value={entry.index}>
+                      {entry.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <Button
+                  variant="contained"
+                  startIcon={<CodeIcon />}
+                  disabled={disableActions || codegenLoading}
+                  onClick={() => {
+                    void generatePytestCode();
+                  }}
+                >
+                  {codegenLoading ? "Generating..." : "Generate Pytest Code"}
+                </Button>
+              </Stack>
+              {codegenResponse ? (
+                <Stack spacing={0.5}>
+                  {Number.isFinite(codegenResponse.record_id) ? (
+                    <Typography variant="body2" color="text.secondary">
+                      Entry ID: {codegenResponse.record_id}
+                    </Typography>
+                  ) : null}
+                  <Typography variant="body2" color="text.secondary">
+                    Model: {codegenResponse.model}
+                  </Typography>
+                  {codegenResponse.function_name ? (
+                    <Typography variant="body2" color="text.secondary">
+                      Test Function: {codegenResponse.function_name}
+                    </Typography>
+                  ) : null}
+                </Stack>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  Use the generator to convert the selected summary into
+                  executable pytest code.
+                </Typography>
+              )}
+              <JsonOutput
+                title="Generated Pytest Code"
+                content={codegenResponse?.code ?? ""}
+                minHeight={320}
+              />
+            </Stack>
+          ) : resultPayload ? (
+            <Typography variant="body2" color="text.secondary">
+              The retrieved result does not include summary data required for
+              code generation.
+            </Typography>
+          ) : null}
+          <Stack spacing={2}>
+            <Typography variant="h6">Execution Steps</Typography>
+            {steps.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                {resultContent
+                  ? "No screenshots were reported for this task."
+                  : "Run a task result query to view captured screenshots."}
+              </Typography>
+            ) : (
+              <Stack spacing={2}>
+                {steps.map((step) => (
+                  <Card key={`${taskId}-${step.index}`} variant="outlined">
+                    <CardHeader
+                      title={`Step ${step.index + 1}`}
+                      subheader={step.filename}
+                    />
+                    <Box px={2} pb={2}>
+                      <CardMedia
+                        component="img"
+                        image={resolveAssetUrl(assetBase, step.image_url)}
+                        alt={`Step ${step.index + 1} screenshot`}
+                        sx={{
+                          maxHeight: 420,
+                          borderRadius: 1,
+                          border: (theme) => `1px solid ${theme.palette.divider}`,
+                          objectFit: "contain"
+                        }}
+                      />
+                    </Box>
+                  </Card>
+                ))}
+              </Stack>
+            )}
+          </Stack>
+        </Stack>
       </Stack>
       <TaskEditDialog
         open={editDialogOpen}
