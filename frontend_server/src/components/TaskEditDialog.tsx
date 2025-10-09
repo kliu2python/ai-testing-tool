@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Button,
   Dialog,
   DialogActions,
@@ -13,7 +14,7 @@ import {
   Typography
 } from "@mui/material";
 
-import type { LlmMode, RunTaskPayload } from "../types";
+import type { RunTaskPayload } from "../types";
 
 interface TaskEditDialogProps {
   open: boolean;
@@ -29,12 +30,6 @@ const PLATFORM_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "android", label: "Android" },
   { value: "ios", label: "iOS" },
   { value: "web", label: "Web" }
-];
-
-const LLM_MODE_OPTIONS: Array<{ value: LlmMode; label: string }> = [
-  { value: "auto", label: "Auto" },
-  { value: "text", label: "Text" },
-  { value: "vision", label: "Vision" }
 ];
 
 export default function TaskEditDialog({
@@ -53,7 +48,6 @@ export default function TaskEditDialog({
   const [reportsFolder, setReportsFolder] = useState("./reports");
   const [debug, setDebug] = useState(false);
   const [repeat, setRepeat] = useState(1);
-  const [llmMode, setLlmMode] = useState<LlmMode>("auto");
   const [error, setError] = useState<string | null>(null);
   const [hasTargets, setHasTargets] = useState(false);
 
@@ -73,7 +67,6 @@ export default function TaskEditDialog({
       setReportsFolder("./reports");
       setDebug(false);
       setRepeat(1);
-      setLlmMode("auto");
       setHasTargets(false);
       return;
     }
@@ -89,7 +82,6 @@ export default function TaskEditDialog({
     setReportsFolder(initialPayload.reports_folder ?? "./reports");
     setDebug(Boolean(initialPayload.debug));
     setRepeat(Number(initialPayload.repeat) || 1);
-    setLlmMode((initialPayload.llm_mode ?? "auto") as LlmMode);
     setHasTargets(Boolean(initialPayload.targets && initialPayload.targets.length > 0));
   }, [initialPayload]);
 
@@ -121,7 +113,7 @@ export default function TaskEditDialog({
         reports_folder: reportsFolder,
         debug,
         repeat,
-        llm_mode: llmMode
+        llm_mode: "auto"
       };
 
       if (!hasTargets) {
@@ -203,27 +195,15 @@ export default function TaskEditDialog({
                 ))}
               </TextField>
               <TextField
-                select
-                label="LLM Mode"
-                value={llmMode}
-                onChange={(event) =>
-                  setLlmMode(event.target.value as LlmMode)
-                }
+                label="Reports Folder"
+                value={reportsFolder}
+                onChange={(event) => setReportsFolder(event.target.value)}
                 fullWidth
-              >
-                {LLM_MODE_OPTIONS.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </TextField>
+              />
             </Stack>
-            <TextField
-              label="Reports Folder"
-              value={reportsFolder}
-              onChange={(event) => setReportsFolder(event.target.value)}
-              fullWidth
-            />
+            <Alert severity="info">
+              Vision support is detected automatically from your task details. No manual toggle is necessary when editing stored runs.
+            </Alert>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
               <TextField
                 label="Repeat Count"

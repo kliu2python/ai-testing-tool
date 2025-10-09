@@ -48,7 +48,6 @@ export interface RunTaskPayload {
   debug: boolean;
   repeat: number;
   llm_mode: LlmMode;
-  image_description?: string;
 }
 
 export interface NotificationState {
