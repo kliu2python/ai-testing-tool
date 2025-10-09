@@ -7,15 +7,15 @@ import {
   CardHeader,
   CardMedia,
   Chip,
+  Collapse,
+  Divider,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemText,
+  MenuItem,
   Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  MenuItem,
   TextField,
   Tooltip,
   Typography
@@ -100,7 +100,8 @@ export default function TaskManagementPanel({
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editDialogLoading, setEditDialogLoading] = useState(false);
   const [editDialogSaving, setEditDialogSaving] = useState(false);
-  const [expandedTasks, setExpandedTasks] = useState<Record<string, boolean>>({});
+  const [expandedRunLists, setExpandedRunLists] = useState<Record<string, boolean>>({});
+  const [openTaskMenus, setOpenTaskMenus] = useState<Record<string, boolean>>({});
 
   const assetBase = useMemo(() => baseUrl.replace(/\/$/, ""), [baseUrl]);
   const selectedSummary = useMemo(
@@ -108,6 +109,8 @@ export default function TaskManagementPanel({
       summaryEntries.find((entry) => entry.index === selectedSummaryIndex) ?? null,
     [summaryEntries, selectedSummaryIndex]
   );
+
+  const trimmedTaskId = taskId.trim();
 
   type TaskStatusKey = keyof TaskCollectionResponse;
 
@@ -200,15 +203,50 @@ export default function TaskManagementPanel({
   }, [tasks]);
 
   useEffect(() => {
-    setExpandedTasks({});
+    setExpandedRunLists({});
+    setOpenTaskMenus((previous) => {
+      if (groupedTasks.length === 0) {
+        return {};
+      }
+      const retained: Record<string, boolean> = {};
+      groupedTasks.forEach((group) => {
+        if (previous[group.task_name]) {
+          retained[group.task_name] = true;
+        }
+      });
+      return retained;
+    });
   }, [groupedTasks]);
 
-  const toggleTaskRuns = useCallback((taskName: string) => {
-    setExpandedTasks((previous) => ({
+  const toggleRunList = useCallback((taskName: string) => {
+    setExpandedRunLists((previous) => ({
       ...previous,
       [taskName]: !previous[taskName]
     }));
   }, []);
+
+  const toggleTaskMenu = useCallback((taskName: string) => {
+    setOpenTaskMenus((previous) => ({
+      ...previous,
+      [taskName]: !previous[taskName]
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (!trimmedTaskId) {
+      return;
+    }
+    const owningGroup = groupedTasks.find((group) =>
+      group.runs.some((run) => run.task_id === trimmedTaskId)
+    );
+    if (!owningGroup) {
+      return;
+    }
+    setOpenTaskMenus((previous) => ({
+      ...previous,
+      [owningGroup.task_name]: true
+    }));
+  }, [trimmedTaskId, groupedTasks]);
 
   const collapseThreshold = 10;
 
@@ -672,156 +710,180 @@ export default function TaskManagementPanel({
           <Stack spacing={1.5}>
             <Typography variant="h6">Queued Tasks</Typography>
             <Typography variant="body2" color="text.secondary">
-              Click a task chip to populate the Task ID field or use the delete
-              icon to remove individual runs.
+              Expand a task name to reveal recent runs. Select a run chip to
+              populate the Task ID field or use the delete icon to remove
+              individual runs.
             </Typography>
-            <TableContainer component={Paper} variant="outlined">
-              <Table size="small" aria-label="queued tasks">
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ width: { xs: "35%", md: "30%" } }}>
-                      Task Name
-                    </TableCell>
-                    <TableCell>Queued Runs</TableCell>
-                    <TableCell align="right">Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {groupedTasks.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={3}>
-                        <Typography
-                          variant="body2"
-                          color="text.secondary"
-                          align="center"
-                          sx={{ py: 2 }}
-                        >
-                          {tasks
-                            ? "No tasks available. Refresh again once new runs are queued."
-                            : "Refresh to load your recent automation tasks."}
-                        </Typography>
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    groupedTasks.map((group) => (
-                      <TableRow
-                        key={group.task_name}
-                        hover
-                        sx={{ verticalAlign: "top" }}
-                      >
-                        <TableCell>
-                          <Stack spacing={0.5}>
-                            <Typography variant="subtitle2" fontWeight={600}>
-                              {group.task_name}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {group.runs.length} run
-                              {group.runs.length === 1 ? "" : "s"}
-                            </Typography>
-                          </Stack>
-                        </TableCell>
-                        <TableCell>
-                          {(() => {
-                            const isCollapsible =
-                              group.runs.length > collapseThreshold;
-                            const isExpanded =
-                              expandedTasks[group.task_name] ?? false;
-                            const visibleRuns =
-                              isCollapsible && !isExpanded
-                                ? group.runs.slice(0, collapseThreshold)
-                                : group.runs;
-                            const hiddenCount =
-                              group.runs.length - visibleRuns.length;
+            <Paper variant="outlined">
+              {groupedTasks.length === 0 ? (
+                <Box px={2} py={4}>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    align="center"
+                  >
+                    {tasks
+                      ? "No tasks available. Refresh again once new runs are queued."
+                      : "Refresh to load your recent automation tasks."}
+                  </Typography>
+                </Box>
+              ) : (
+                <List disablePadding aria-label="queued task list">
+                  {groupedTasks.map((group, index) => {
+                    const isCollapsible = group.runs.length > collapseThreshold;
+                    const runListExpanded =
+                      expandedRunLists[group.task_name] ?? false;
+                    const visibleRuns =
+                      isCollapsible && !runListExpanded
+                        ? group.runs.slice(0, collapseThreshold)
+                        : group.runs;
+                    const hiddenCount = group.runs.length - visibleRuns.length;
+                    const menuOpen = openTaskMenus[group.task_name] ?? false;
+                    const isSelectedGroup = group.runs.some(
+                      (run) => run.task_id === trimmedTaskId
+                    );
 
-                            return (
+                    return (
+                      <Box key={group.task_name}>
+                        {index > 0 ? <Divider component="div" /> : null}
+                        <ListItem disablePadding>
+                          <ListItemButton
+                            onClick={() => toggleTaskMenu(group.task_name)}
+                            selected={menuOpen || isSelectedGroup}
+                            sx={{
+                              alignItems: "flex-start",
+                              py: 1.5,
+                              px: 2,
+                              gap: 1
+                            }}
+                            aria-expanded={menuOpen}
+                          >
+                            <ListItemText
+                              primary={group.task_name}
+                              secondary={`${group.runs.length} run${
+                                group.runs.length === 1 ? "" : "s"
+                              }`}
+                              primaryTypographyProps={{
+                                variant: "subtitle1",
+                                fontWeight: 600
+                              }}
+                              secondaryTypographyProps={{
+                                variant: "caption",
+                                color: "text.secondary"
+                              }}
+                              sx={{ my: 0 }}
+                            />
+                            <Stack direction="row" spacing={1} alignItems="center">
+                              {isSelectedGroup ? (
+                                <Chip
+                                  label="Active"
+                                  color="primary"
+                                  size="small"
+                                  variant="outlined"
+                                />
+                              ) : null}
+                              {menuOpen ? (
+                                <ExpandLessIcon fontSize="small" color="action" />
+                              ) : (
+                                <ExpandMoreIcon fontSize="small" color="action" />
+                              )}
+                            </Stack>
+                          </ListItemButton>
+                        </ListItem>
+                        <Collapse in={menuOpen} timeout="auto" unmountOnExit>
+                          <Divider component="div" />
+                          <Box px={2} py={2}>
+                            <Stack spacing={1.5}>
+                              <Typography variant="body2" color="text.secondary">
+                                Select a run to load its status and results. Use the
+                                trash icon on a chip to delete that run.
+                              </Typography>
                               <Stack spacing={1} alignItems="flex-start">
                                 <Stack direction="row" spacing={1} flexWrap="wrap">
                                   {visibleRuns.map((run) => {
-                                      const statusLabel =
-                                        statusMeta[run.status].label;
-                                      const timestamp =
-                                        run.updated_at ?? run.created_at;
-                                      const shortTimestamp =
-                                        formatTimestamp(timestamp) ?? "Unknown time";
-                                      const longTimestamp =
-                                        formatTimestamp(timestamp, { long: true }) ??
-                                        "Unknown time";
-                                      const timingPrefix = timestampPrefix(run.status);
-                                      const label = [
-                                        statusLabel,
-                                        shortTimestamp,
-                                        run.task_id
-                                      ].join(" • ");
-                                      const isSelected = taskId.trim() === run.task_id;
-                                      const canDelete =
-                                        !disableActions && deletingId !== run.task_id;
-                                      return (
-                                        <Tooltip
-                                          key={run.task_id}
-                                          arrow
-                                          title={
-                                            <Stack spacing={0.5}>
-                                              <Typography
-                                                variant="caption"
-                                                component="span"
-                                                color="inherit"
-                                              >
-                                                Status: {statusLabel}
-                                              </Typography>
-                                              <Typography
-                                                variant="caption"
-                                                component="span"
-                                                color="inherit"
-                                              >
-                                                {timingPrefix}: {longTimestamp}
-                                              </Typography>
-                                              <Typography
-                                                variant="caption"
-                                                component="span"
-                                                color="inherit"
-                                              >
-                                                Task ID: {run.task_id}
-                                              </Typography>
-                                              <Typography
-                                                variant="caption"
-                                                component="span"
-                                                color="inherit"
-                                              >
-                                                Click to select or delete.
-                                              </Typography>
-                                            </Stack>
+                                    const statusLabel = statusMeta[run.status].label;
+                                    const timestamp = run.updated_at ?? run.created_at;
+                                    const shortTimestamp =
+                                      formatTimestamp(timestamp) ?? "Unknown time";
+                                    const longTimestamp =
+                                      formatTimestamp(timestamp, { long: true }) ??
+                                      "Unknown time";
+                                    const timingPrefix = timestampPrefix(run.status);
+                                    const label = [
+                                      statusLabel,
+                                      shortTimestamp,
+                                      run.task_id
+                                    ].join(" • ");
+                                    const isSelected = trimmedTaskId === run.task_id;
+                                    const canDelete =
+                                      !disableActions && deletingId !== run.task_id;
+                                    return (
+                                      <Tooltip
+                                        key={run.task_id}
+                                        arrow
+                                        title={
+                                          <Stack spacing={0.5}>
+                                            <Typography
+                                              variant="caption"
+                                              component="span"
+                                              color="inherit"
+                                            >
+                                              Status: {statusLabel}
+                                            </Typography>
+                                            <Typography
+                                              variant="caption"
+                                              component="span"
+                                              color="inherit"
+                                            >
+                                              {timingPrefix}: {longTimestamp}
+                                            </Typography>
+                                            <Typography
+                                              variant="caption"
+                                              component="span"
+                                              color="inherit"
+                                            >
+                                              Task ID: {run.task_id}
+                                            </Typography>
+                                            <Typography
+                                              variant="caption"
+                                              component="span"
+                                              color="inherit"
+                                            >
+                                              Click to select or delete.
+                                            </Typography>
+                                          </Stack>
+                                        }
+                                      >
+                                        <Chip
+                                          label={label}
+                                          color={statusMeta[run.status].color}
+                                          size="small"
+                                          variant={
+                                            isSelected || run.status === "pending"
+                                              ? "outlined"
+                                              : "filled"
                                           }
-                                        >
-                                          <Chip
-                                            label={label}
-                                            color={statusMeta[run.status].color}
-                                            size="small"
-                                            variant={
-                                              isSelected || run.status === "pending"
-                                                ? "outlined"
-                                                : "filled"
-                                            }
-                                            onClick={() => setTaskId(run.task_id)}
-                                            onDelete={
-                                              canDelete
-                                                ? () => deleteTask(run.task_id)
-                                                : undefined
-                                            }
-                                            deleteIcon={
-                                              <DeleteForeverIcon fontSize="small" />
-                                            }
-                                            sx={{
-                                              mr: 1,
-                                              mb: 1,
-                                              borderStyle: isSelected
-                                                ? "solid"
-                                                : undefined
-                                            }}
-                                          />
-                                        </Tooltip>
-                                      );
-                                    })}
-                                  {isCollapsible && hiddenCount > 0 && !isExpanded ? (
+                                          onClick={() => setTaskId(run.task_id)}
+                                          onDelete={
+                                            canDelete
+                                              ? () => deleteTask(run.task_id)
+                                              : undefined
+                                          }
+                                          deleteIcon={
+                                            <DeleteForeverIcon fontSize="small" />
+                                          }
+                                          sx={{
+                                            mr: 1,
+                                            mb: 1,
+                                            borderStyle: isSelected
+                                              ? "solid"
+                                              : undefined
+                                          }}
+                                        />
+                                      </Tooltip>
+                                    );
+                                  })}
+                                  {isCollapsible && hiddenCount > 0 && !runListExpanded ? (
                                     <Chip
                                       label={`+${hiddenCount} more`}
                                       size="small"
@@ -833,7 +895,7 @@ export default function TaskManagementPanel({
                                 </Stack>
                                 {isCollapsible ? (
                                   <Stack spacing={0.5}>
-                                    {!isExpanded ? (
+                                    {!runListExpanded ? (
                                       <Typography
                                         variant="caption"
                                         color="text.secondary"
@@ -846,59 +908,57 @@ export default function TaskManagementPanel({
                                       size="small"
                                       variant="text"
                                       startIcon={
-                                        isExpanded ? (
+                                        runListExpanded ? (
                                           <ExpandLessIcon fontSize="small" />
                                         ) : (
                                           <ExpandMoreIcon fontSize="small" />
                                         )
                                       }
-                                      onClick={() => toggleTaskRuns(group.task_name)}
+                                      onClick={() => toggleRunList(group.task_name)}
                                       sx={{ alignSelf: "flex-start" }}
                                     >
-                                      {isExpanded
+                                      {runListExpanded
                                         ? "Show fewer runs"
                                         : `Show all ${group.runs.length} runs`}
                                     </Button>
                                   </Stack>
                                 ) : null}
                               </Stack>
-                            );
-                          })()}
-                        </TableCell>
-                        <TableCell align="right">
-                          <Stack
-                            direction="row"
-                            spacing={1}
-                            justifyContent="flex-end"
-                          >
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              startIcon={<EditIcon fontSize="small" />}
-                              onClick={() => openEditDialog(group.task_name)}
-                              disabled={disableModifyButton}
-                            >
-                              Modify
-                            </Button>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              startIcon={<ReplayIcon fontSize="small" />}
-                              onClick={() => rerunTask(group.task_name)}
-                              disabled={
-                                disableActions || rerunningName === group.task_name
-                              }
-                            >
-                              Rerun
-                            </Button>
-                          </Stack>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
+                              <Stack
+                                direction={{ xs: "column", sm: "row" }}
+                                spacing={1}
+                                justifyContent="flex-start"
+                              >
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  startIcon={<EditIcon fontSize="small" />}
+                                  onClick={() => openEditDialog(group.task_name)}
+                                  disabled={disableModifyButton}
+                                >
+                                  Modify
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  startIcon={<ReplayIcon fontSize="small" />}
+                                  onClick={() => rerunTask(group.task_name)}
+                                  disabled={
+                                    disableActions || rerunningName === group.task_name
+                                  }
+                                >
+                                  Rerun
+                                </Button>
+                              </Stack>
+                            </Stack>
+                          </Box>
+                        </Collapse>
+                      </Box>
+                    );
+                  })}
+                </List>
+              )}
+            </Paper>
           </Stack>
           <TextField
             label="Task ID"
