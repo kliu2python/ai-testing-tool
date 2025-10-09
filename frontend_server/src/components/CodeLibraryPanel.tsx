@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -7,21 +7,26 @@ import {
   CardContent,
   CircularProgress,
   Divider,
+  Grid,
   List,
   ListItem,
   ListItemButton,
   ListItemText,
   Stack,
+  Slider,
   Tooltip,
   Typography
 } from "@mui/material";
+
+import TextField from "@mui/material/TextField";
 
 import { apiRequest, formatPayload } from "../api";
 import type {
   CodegenRecordDetail,
   CodegenRecordSummary,
   NotificationState,
-  PytestExecutionResponse
+  PytestExecutionResponse,
+  HumanScoreResponse
 } from "../types";
 import JsonOutput from "./JsonOutput";
 import PlayCircleIcon from "@mui/icons-material/PlayCircle";
@@ -52,6 +57,9 @@ export default function CodeLibraryPanel({
   const [executionResult, setExecutionResult] =
     useState<PytestExecutionResponse | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [scoreValue, setScoreValue] = useState(0);
+  const [scoreDirty, setScoreDirty] = useState(false);
+  const [scoreSaving, setScoreSaving] = useState(false);
 
   const hasEntries = entries.length > 0;
   const requireToken = useCallback(() => {
@@ -134,6 +142,20 @@ export default function CodeLibraryPanel({
     },
     [loadDetail]
   );
+
+  useEffect(() => {
+    if (!selectedDetail) {
+      setScoreValue(0);
+      setScoreDirty(false);
+      return;
+    }
+    const current =
+      typeof selectedDetail.human_score === "number"
+        ? selectedDetail.human_score
+        : 0;
+    setScoreValue(current);
+    setScoreDirty(selectedDetail.human_score == null);
+  }, [selectedDetail]);
 
   const handleExecute = useCallback(async () => {
     if (!selectedId) {
@@ -223,6 +245,98 @@ export default function CodeLibraryPanel({
       onNotify({ message, severity: "error" });
     }
   }, [baseUrl, onNotify, requireToken, selectedId]);
+
+  const scoreHelpText = useMemo(() => {
+    if (!selectedDetail) {
+      return "Provide feedback once an entry is selected.";
+    }
+    return "Scores range from -1.0 (strongly negative) to 1.0 (strongly positive).";
+  }, [selectedDetail]);
+
+  const handleScoreSliderChange = useCallback(
+    (_event: Event, value: number | number[]) => {
+      if (Array.isArray(value)) {
+        return;
+      }
+      setScoreValue(value);
+      if (selectedDetail) {
+        const existing =
+          typeof selectedDetail.human_score === "number"
+            ? selectedDetail.human_score
+            : 0;
+        setScoreDirty(
+          selectedDetail.human_score == null || Math.abs(value - existing) > 1e-3
+        );
+      }
+    },
+    [selectedDetail]
+  );
+
+  const handleScoreInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const parsed = Number.parseFloat(event.target.value);
+      if (Number.isNaN(parsed)) {
+        setScoreValue(0);
+        if (selectedDetail && selectedDetail.human_score == null) {
+          setScoreDirty(true);
+        }
+        return;
+      }
+      const clamped = Math.min(Math.max(parsed, -1), 1);
+      setScoreValue(clamped);
+      if (selectedDetail) {
+        const existing =
+          typeof selectedDetail.human_score === "number"
+            ? selectedDetail.human_score
+            : 0;
+        setScoreDirty(
+          selectedDetail.human_score == null || Math.abs(clamped - existing) > 1e-3
+        );
+      }
+    },
+    [selectedDetail]
+  );
+
+  const handleSubmitScore = useCallback(async () => {
+    if (!selectedId) {
+      return;
+    }
+    const authToken = requireToken();
+    if (!authToken) {
+      return;
+    }
+    setScoreSaving(true);
+    const response = await apiRequest<HumanScoreResponse>(
+      baseUrl,
+      "post",
+      `/codegen/pytest/${selectedId}/human-score`,
+      { score: scoreValue },
+      authToken
+    );
+    setScoreSaving(false);
+    if (response.ok && response.data) {
+      const payload = response.data;
+      setSelectedDetail((prev) => {
+        if (!prev || prev.id !== selectedId) {
+          return prev;
+        }
+        return {
+          ...prev,
+          human_score: payload.human_score,
+          example_score: payload.example_score,
+          example_metrics: payload.metrics
+        };
+      });
+      setScoreDirty(false);
+      onNotify({
+        message: "Recorded human feedback score",
+        severity: "success"
+      });
+    } else {
+      const message = response.error ?? `Request failed with ${response.status}`;
+      onNotify({ message, severity: "error" });
+    }
+  }, [baseUrl, onNotify, requireToken, scoreValue, selectedId]);
 
   const totalSuccesses = entries.reduce(
     (sum, entry) => sum + (entry.success_count ?? 0),
@@ -396,6 +510,61 @@ export default function CodeLibraryPanel({
                     Test Runs: {selectedDetail.success_count ?? 0} success • {" "}
                     {selectedDetail.failure_count ?? 0} failed
                   </Typography>
+                  {selectedDetail.example_score != null ? (
+                    <Typography variant="body2" color="text.secondary">
+                      Example Score: {selectedDetail.example_score.toFixed(3)}
+                    </Typography>
+                  ) : null}
+                  <Stack spacing={1} sx={{ mt: 1 }}>
+                    <Typography variant="subtitle2" fontWeight={600}>
+                      Human Feedback
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {scoreHelpText}
+                    </Typography>
+                    <Grid container spacing={2} alignItems="center">
+                      <Grid item xs>
+                        <Slider
+                          min={-1}
+                          max={1}
+                          step={0.05}
+                          marks={[
+                            { value: -1, label: "-1" },
+                            { value: 0, label: "0" },
+                            { value: 1, label: "1" }
+                          ]}
+                          value={scoreValue}
+                          onChange={handleScoreSliderChange}
+                          valueLabelDisplay="auto"
+                          valueLabelFormat={(value) => value.toFixed(2)}
+                          disabled={!selectedDetail}
+                          sx={{ px: 1 }}
+                        />
+                      </Grid>
+                      <Grid item>
+                        <TextField
+                          label="Score"
+                          type="number"
+                          value={scoreValue.toFixed(2)}
+                          onChange={handleScoreInputChange}
+                          inputProps={{ step: 0.05, min: -1, max: 1 }}
+                          size="small"
+                          sx={{ width: 96 }}
+                        />
+                      </Grid>
+                    </Grid>
+                    <Stack direction="row" spacing={1}>
+                      <Button
+                        variant="contained"
+                        onClick={() => {
+                          void handleSubmitScore();
+                        }}
+                        disabled={!selectedDetail || scoreSaving || !scoreDirty}
+                      >
+                        {scoreSaving ? "Saving…" : "Save Score"}
+                      </Button>
+                    </Stack>
+                  </Stack>
                   <Typography variant="body2" color="text.secondary">
                     Created: {selectedDetail.created_at ?? "Unknown"}
                   </Typography>
@@ -409,6 +578,13 @@ export default function CodeLibraryPanel({
                     content={formatPayload(selectedDetail.summary_json ?? null)}
                     minHeight={200}
                   />
+                  {selectedDetail.example_metrics ? (
+                    <JsonOutput
+                      title="Example Metrics"
+                      content={formatPayload(selectedDetail.example_metrics)}
+                      minHeight={160}
+                    />
+                  ) : null}
                 </Stack>
               ) : null}
               {executionResult ? (
