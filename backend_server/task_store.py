@@ -220,6 +220,57 @@ def register_task_run(
         conn.close()
 
 
+def load_example_by_code_hash(code_hash: str) -> Optional[Dict[str, Any]]:
+    """Return the stored example identified by ``code_hash`` if it exists."""
+
+    conn = _connect()
+    try:
+        ensure_example_tables(conn)
+        cursor = conn.execute(
+            """
+            SELECT example_id, metrics_json, score
+              FROM code_examples
+             WHERE code_hash = ?
+            """,
+            (code_hash,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        metrics = json.loads(row["metrics_json"]) if row["metrics_json"] else {}
+        return {
+            "example_id": row["example_id"],
+            "metrics": metrics,
+            "score": float(row["score"] or 0.0),
+        }
+    finally:
+        conn.close()
+
+
+def update_example_metrics(
+    code_hash: str, metrics: Dict[str, float], score: float
+) -> bool:
+    """Persist ``metrics`` and ``score`` for the example keyed by ``code_hash``."""
+
+    conn = _connect()
+    try:
+        ensure_example_tables(conn)
+        cursor = conn.execute(
+            """
+            UPDATE code_examples
+               SET metrics_json = ?,
+                   score = ?
+             WHERE code_hash = ?
+            """,
+            (json.dumps(metrics), float(score), code_hash),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
 def set_task_status(
     task_id: str,
     status: str,

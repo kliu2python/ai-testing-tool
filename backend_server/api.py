@@ -27,6 +27,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field, ValidationError, model_validator
 from redis.asyncio import Redis
 
+from backend_server.example_bootstrap import (
+    hash_task,
+    load_example_config,
+    normalise_code,
+    sanitize_text,
+    score_human,
+    score_metrics,
+)
 from backend_server.libraries.codegen import (
     CodegenError,
     async_generate_pytest_from_path,
@@ -49,10 +57,12 @@ from backend_server.task_store import (
     load_latest_task_request,
     load_task_metadata,
     load_task_run,
+    load_example_by_code_hash,
     record_codegen_execution,
     register_task_run,
     set_task_status,
     store_codegen_result,
+    update_example_metrics,
     update_task_request,
 )
 
@@ -530,6 +540,26 @@ class CodegenRecordDetail(CodegenRecordSummary):
 
     code: str
     summary_json: Optional[Dict[str, Any]] = None
+    human_score: Optional[float] = None
+    example_score: Optional[float] = None
+    example_metrics: Optional[Dict[str, float]] = None
+
+
+class HumanScoreRequest(BaseModel):
+    """Payload for recording human feedback on generated code."""
+
+    score: float = Field(
+        ..., description="Human supplied rating in the range [-1.0, 1.0]."
+    )
+
+
+class HumanScoreResponse(BaseModel):
+    """Response payload after persisting a human feedback score."""
+
+    record_id: int
+    human_score: float
+    example_score: float
+    metrics: Dict[str, float]
 
 
 class PytestExecutionResponse(BaseModel):
@@ -939,6 +969,28 @@ async def get_codegen_history_entry(
     if not current_user.is_admin and record.get("user_id") != current_user.id:
         raise HTTPException(status_code=403, detail="Generated code is not accessible")
 
+    human_score_value: Optional[float] = None
+    example_score_value: Optional[float] = None
+    example_metrics: Optional[Dict[str, float]] = None
+    code_text = record.get("code", "")
+    if code_text:
+        try:
+            sanitized_code = sanitize_text(code_text)
+            code_hash = hash_task("code", normalise_code(sanitized_code))
+            example = load_example_by_code_hash(code_hash)
+        except sqlite3.Error as exc:  # pragma: no cover - operational failure
+            logger.exception(
+                "Failed to load example metrics for code %s: %s", record_id, exc
+            )
+        else:
+            if example:
+                metrics = {
+                    key: float(value) for key, value in (example.get("metrics") or {}).items()
+                }
+                example_metrics = metrics
+                human_score_value = metrics.get("human_score")
+                example_score_value = float(example.get("score", 0.0))
+
     return CodegenRecordDetail(
         id=record["id"],
         task_name=record.get("task_name"),
@@ -952,6 +1004,9 @@ async def get_codegen_history_entry(
         summary_json=record.get("summary_json"),
         success_count=record.get("success_count", 0),
         failure_count=record.get("failure_count", 0),
+        human_score=human_score_value,
+        example_score=example_score_value,
+        example_metrics=example_metrics,
     )
 
 
@@ -1062,6 +1117,87 @@ async def execute_codegen_history_entry(
         started_at=started_at.isoformat(),
         finished_at=finished_at.isoformat(),
         duration_seconds=duration,
+    )
+
+
+@app.post(
+    "/codegen/pytest/{record_id}/human-score",
+    response_model=HumanScoreResponse,
+    summary="Record a human feedback score for a generated pytest module",
+)
+async def set_codegen_human_score(
+    record_id: int,
+    request: HumanScoreRequest,
+    current_user: User = Depends(get_current_user),
+) -> HumanScoreResponse:
+    """Persist a normalised human feedback score for the selected record."""
+
+    try:
+        record = load_codegen_result(record_id)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        logger.exception("Failed to load stored code %s: %s", record_id, exc)
+        raise HTTPException(
+            status_code=503, detail="Failed to load stored code"
+        ) from exc
+
+    if record is None:
+        raise HTTPException(status_code=404, detail="Generated code not found")
+
+    if not current_user.is_admin and record.get("user_id") != current_user.id:
+        raise HTTPException(status_code=403, detail="Generated code is not accessible")
+
+    code_text = record.get("code")
+    if not code_text:
+        raise HTTPException(
+            status_code=400, detail="Generated code does not contain any content"
+        )
+
+    normalized_score = score_human(request.score)
+    config = load_example_config()
+    sanitized_code = sanitize_text(code_text)
+    code_hash = hash_task("code", normalise_code(sanitized_code))
+
+    try:
+        example = load_example_by_code_hash(code_hash)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        logger.exception(
+            "Failed to load example for human score update %s: %s", record_id, exc
+        )
+        raise HTTPException(
+            status_code=503, detail="Failed to update example score"
+        ) from exc
+
+    if not example:
+        raise HTTPException(
+            status_code=404,
+            detail="Stored example for generated code was not found",
+        )
+
+    metrics = {
+        key: float(value) for key, value in (example.get("metrics") or {}).items()
+    }
+    metrics["human_score"] = normalized_score
+    total_score = score_metrics(metrics, config.scoring_weights)
+
+    try:
+        updated = update_example_metrics(code_hash, metrics, total_score)
+    except sqlite3.Error as exc:  # pragma: no cover - operational failure
+        logger.exception(
+            "Failed to persist human score for %s: %s", record_id, exc
+        )
+        raise HTTPException(status_code=503, detail="Failed to store human score") from exc
+
+    if not updated:
+        raise HTTPException(
+            status_code=404,
+            detail="Stored example for generated code was not found",
+        )
+
+    return HumanScoreResponse(
+        record_id=record_id,
+        human_score=normalized_score,
+        example_score=total_score,
+        metrics=metrics,
     )
 
 

@@ -125,6 +125,9 @@ export interface CodegenRecordSummary {
 export interface CodegenRecordDetail extends CodegenRecordSummary {
   code: string;
   summary_json?: Record<string, unknown> | null;
+  human_score?: number | null;
+  example_score?: number | null;
+  example_metrics?: Record<string, number> | null;
 }
 
 export interface PytestExecutionResponse {
@@ -135,4 +138,11 @@ export interface PytestExecutionResponse {
   started_at: string;
   finished_at: string;
   duration_seconds: number;
+}
+
+export interface HumanScoreResponse {
+  record_id: number;
+  human_score: number;
+  example_score: number;
+  metrics: Record<string, number>;
 }
