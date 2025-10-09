@@ -37,7 +37,6 @@ import EditIcon from "@mui/icons-material/Edit";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import CodeIcon from "@mui/icons-material/Code";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 
 import {
   apiRequest,
@@ -1336,10 +1335,9 @@ export default function TaskManagementPanel({
             <Button
               variant="outlined"
               color="inherit"
-              startIcon={<DeleteOutlineIcon />}
               onClick={clearTaskOutputs}
               disabled={!hasTaskOutputs}
-              sx={{ minWidth: { sm: 164 } }}
+              sx={{ minWidth: { sm: 164 }, whiteSpace: "nowrap" }}
             >
               Clear Results
             </Button>
