@@ -152,8 +152,8 @@ export default function RunTaskForm({
     createTask(SAMPLE_TASK_PRESET)
   ]);
   const [targetForms, setTargetForms] = useState<TargetFormState[]>([]);
-  const [platform, setPlatform] = useState<PlatformOption>("android");
-  const [server, setServer] = useState(PLATFORM_SERVERS.android);
+  const [platform, setPlatform] = useState<PlatformOption>("ios");
+  const [server, setServer] = useState(PLATFORM_SERVERS.ios);
   const [reportsFolder, setReportsFolder] = useState("./reports");
   const [debug, setDebug] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -722,6 +722,24 @@ export default function RunTaskForm({
         </Typography>
       </Divider>
 
+      <TextField
+        select
+        label="Test device"
+        value={platform}
+        onChange={(event) => {
+          const nextPlatform = event.target.value as PlatformOption;
+          setPlatform(nextPlatform);
+          setServer(PLATFORM_SERVERS[nextPlatform]);
+        }}
+        fullWidth
+        helperText="Used when no specific automation targets are defined."
+        disabled={targetForms.length > 0}
+      >
+        <MenuItem value="android">Android</MenuItem>
+        <MenuItem value="ios">iOS</MenuItem>
+        <MenuItem value="web">Web</MenuItem>
+      </TextField>
+
       <Accordion disableGutters>
         <AccordionSummary
           expandIcon={<ExpandMoreIcon />}
@@ -732,23 +750,6 @@ export default function RunTaskForm({
         </AccordionSummary>
         <AccordionDetails>
           <Stack spacing={2}>
-            <TextField
-              select
-              label="Platform"
-              value={platform}
-              onChange={(event) => {
-                const nextPlatform = event.target.value as PlatformOption;
-                setPlatform(nextPlatform);
-                setServer(PLATFORM_SERVERS[nextPlatform]);
-              }}
-              fullWidth
-              helperText="Used when no specific automation targets are defined."
-              disabled={targetForms.length > 0}
-            >
-              <MenuItem value="android">Android</MenuItem>
-              <MenuItem value="ios">iOS</MenuItem>
-              <MenuItem value="web">Web</MenuItem>
-            </TextField>
             <TextField
               label="Automation Server"
               value={server}
