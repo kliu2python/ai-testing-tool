@@ -31,14 +31,12 @@ import {
 import type { SelectChangeEvent } from "@mui/material/Select";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import TaskIcon from "@mui/icons-material/Task";
-import InsightsIcon from "@mui/icons-material/Insights";
 import DeleteForeverIcon from "@mui/icons-material/DeleteForever";
 import ReplayIcon from "@mui/icons-material/Replay";
 import EditIcon from "@mui/icons-material/Edit";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import CodeIcon from "@mui/icons-material/Code";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 
 import {
   apiRequest,
@@ -825,11 +823,16 @@ export default function TaskManagementPanel({
       <Stack
         direction={{ xs: "column", lg: "row" }}
         spacing={3}
-        alignItems="stretch"
+        sx={{ alignItems: { xs: "stretch", lg: "flex-start" } }}
       >
         <Stack
           spacing={3}
-          sx={{ flexBasis: { lg: "45%" }, flexGrow: 1, minWidth: 0 }}
+          sx={{
+            flexBasis: { lg: "45%" },
+            flexGrow: { xs: 1, lg: 0 },
+            flexShrink: 0,
+            minWidth: 0
+          }}
         >
           <Stack spacing={1.5}>
             <Stack
@@ -1313,11 +1316,10 @@ export default function TaskManagementPanel({
             alignItems={{ xs: "stretch", sm: "center" }}
           >
             <Button
-              startIcon={<InsightsIcon />}
               variant="contained"
               onClick={loadStatus}
               disabled={disableActions || !trimmedTaskId}
-              sx={{ minWidth: { sm: 164 } }}
+              sx={{ minWidth: { sm: 164 }, whiteSpace: "nowrap" }}
             >
               Get Task Status
             </Button>
@@ -1333,10 +1335,9 @@ export default function TaskManagementPanel({
             <Button
               variant="outlined"
               color="inherit"
-              startIcon={<DeleteOutlineIcon />}
               onClick={clearTaskOutputs}
               disabled={!hasTaskOutputs}
-              sx={{ minWidth: { sm: 164 } }}
+              sx={{ minWidth: { sm: 164 }, whiteSpace: "nowrap" }}
             >
               Clear Results
             </Button>
@@ -1344,7 +1345,14 @@ export default function TaskManagementPanel({
         </Stack>
         <Stack
           spacing={3}
-          sx={{ flexBasis: { lg: "55%" }, flexGrow: 1, minWidth: 0 }}
+          sx={{
+            flexBasis: { lg: "55%" },
+            flexGrow: 1,
+            minWidth: 0,
+            maxHeight: { lg: "72vh" },
+            overflowY: { lg: "auto" },
+            pr: { lg: 1 }
+          }}
         >
           <Stack spacing={2}>
             <Typography variant="h6">Task Details</Typography>
