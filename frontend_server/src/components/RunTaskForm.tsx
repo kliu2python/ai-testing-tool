@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Button,
   Card,
   CardContent,
@@ -18,6 +21,7 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
 import { apiRequest, formatPayload } from "../api";
 import type {
@@ -134,6 +138,9 @@ export default function RunTaskForm({
   const [repeatCount, setRepeatCount] = useState(1);
   const [promptCopied, setPromptCopied] = useState(false);
   const [llmMode, setLlmMode] = useState<LlmMode>("auto");
+  const [imageDescription, setImageDescription] = useState("");
+
+  const visionEnabled = llmMode === "vision";
 
   const promptValue =
     promptOption === "custom"
@@ -359,6 +366,18 @@ export default function RunTaskForm({
       llm_mode: llmMode
     };
 
+    if (llmMode === "vision") {
+      const trimmedDescription = imageDescription.trim();
+      if (!trimmedDescription) {
+        onNotify({
+          message: "Provide an image description when running in vision mode",
+          severity: "warning"
+        });
+        return;
+      }
+      payload.image_description = trimmedDescription;
+    }
+
     if (targetForms.length === 0) {
       if (!trimmedServer) {
         onNotify({
@@ -451,10 +470,41 @@ export default function RunTaskForm({
       )}
 
       <Divider flexItem>
-        <Typography variant="subtitle1" fontWeight={600}>
-          Task Details
-        </Typography>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={1.5}
+          alignItems={{ xs: "flex-start", sm: "center" }}
+          justifyContent="space-between"
+        >
+          <Typography variant="subtitle1" fontWeight={600}>
+            Task Details
+          </Typography>
+          <FormControlLabel
+            control={
+              <Switch
+                color="secondary"
+                checked={visionEnabled}
+                onChange={(event) =>
+                  setLlmMode(event.target.checked ? "vision" : "auto")
+                }
+              />
+            }
+            label="Vision mode"
+          />
+        </Stack>
       </Divider>
+
+      {visionEnabled ? (
+        <TextField
+          label="Image Description"
+          value={imageDescription}
+          onChange={(event) => setImageDescription(event.target.value)}
+          fullWidth
+          multiline
+          minRows={3}
+          helperText="Describe the image context for the vision-enabled run."
+        />
+      ) : null}
 
       <Stack spacing={2}>
         {taskForms.map((task, index) => {
@@ -646,79 +696,80 @@ export default function RunTaskForm({
         </Typography>
       </Divider>
 
-      <TextField
-        select
-        label="Platform"
-        value={platform}
-        onChange={(event) => {
-          const nextPlatform = event.target.value as PlatformOption;
-          setPlatform(nextPlatform);
-          setServer(PLATFORM_SERVERS[nextPlatform]);
-        }}
-        fullWidth
-        helperText="Used when no specific automation targets are defined."
-        disabled={targetForms.length > 0}
-      >
-        <MenuItem value="android">Android</MenuItem>
-        <MenuItem value="ios">iOS</MenuItem>
-        <MenuItem value="web">Web</MenuItem>
-      </TextField>
-      <TextField
-        label="Automation Server"
-        value={server}
-        onChange={(event) => setServer(event.target.value)}
-        fullWidth
-        disabled={targetForms.length > 0}
-        helperText={
-          targetForms.length > 0
-            ? "Automation targets specify their own server endpoints."
-            : "Used when no automation targets are configured."
-        }
-      />
-      <TextField
-        select
-        label="LLM Mode"
-        value={llmMode}
-        onChange={(event) => setLlmMode(event.target.value as LlmMode)}
-        fullWidth
-        helperText="Choose whether to auto-detect, force text-only, or use the vision model."
-      >
-        <MenuItem value="auto">Auto (detect from task)</MenuItem>
-        <MenuItem value="text">Text only</MenuItem>
-        <MenuItem value="vision">Vision enabled</MenuItem>
-      </TextField>
-      <TextField
-        label="Reports Folder"
-        value={reportsFolder}
-        onChange={(event) => setReportsFolder(event.target.value)}
-        fullWidth
-      />
-      <TextField
-        label="Repeat Count"
-        type="number"
-        value={repeatCount}
-        onChange={(event) => {
-          const next = Number(event.target.value);
-          if (Number.isNaN(next)) {
-            setRepeatCount(1);
-            return;
-          }
-          const normalised = Math.min(500, Math.max(1, Math.floor(next)));
-          setRepeatCount(normalised);
-        }}
-        fullWidth
-        helperText="Number of times to enqueue this run."
-        inputProps={{ min: 1, max: 500 }}
-      />
-      <FormControlLabel
-        control={
-          <Switch
-            checked={debug}
-            onChange={(event) => setDebug(event.target.checked)}
-          />
-        }
-        label="Enable Debug Mode"
-      />
+      <Accordion disableGutters>
+        <AccordionSummary
+          expandIcon={<ExpandMoreIcon />}
+          aria-controls="execution-settings-content"
+          id="execution-settings-header"
+        >
+          <Typography variant="subtitle1">Automation configuration</Typography>
+        </AccordionSummary>
+        <AccordionDetails>
+          <Stack spacing={2}>
+            <TextField
+              select
+              label="Platform"
+              value={platform}
+              onChange={(event) => {
+                const nextPlatform = event.target.value as PlatformOption;
+                setPlatform(nextPlatform);
+                setServer(PLATFORM_SERVERS[nextPlatform]);
+              }}
+              fullWidth
+              helperText="Used when no specific automation targets are defined."
+              disabled={targetForms.length > 0}
+            >
+              <MenuItem value="android">Android</MenuItem>
+              <MenuItem value="ios">iOS</MenuItem>
+              <MenuItem value="web">Web</MenuItem>
+            </TextField>
+            <TextField
+              label="Automation Server"
+              value={server}
+              onChange={(event) => setServer(event.target.value)}
+              fullWidth
+              disabled={targetForms.length > 0}
+              helperText={
+                targetForms.length > 0
+                  ? "Automation targets specify their own server endpoints."
+                  : "Used when no automation targets are configured."
+              }
+            />
+            <TextField
+              label="Reports Folder"
+              value={reportsFolder}
+              onChange={(event) => setReportsFolder(event.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="Repeat Count"
+              type="number"
+              value={repeatCount}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                if (Number.isNaN(next)) {
+                  setRepeatCount(1);
+                  return;
+                }
+                const normalised = Math.min(500, Math.max(1, Math.floor(next)));
+                setRepeatCount(normalised);
+              }}
+              fullWidth
+              helperText="Number of times to enqueue this run."
+              inputProps={{ min: 1, max: 500 }}
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={debug}
+                  onChange={(event) => setDebug(event.target.checked)}
+                />
+              }
+              label="Enable Debug Mode"
+            />
+          </Stack>
+        </AccordionDetails>
+      </Accordion>
       <Button
         variant="contained"
         color="secondary"

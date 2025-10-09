@@ -30,6 +30,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import CodeIcon from "@mui/icons-material/Code";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 
 import {
   apiRequest,
@@ -522,6 +523,24 @@ export default function TaskManagementPanel({
 
   const disableModifyButton = disableActions || editingInProgress;
 
+  const hasTaskOutputs =
+    Boolean(statusContent) ||
+    Boolean(resultContent) ||
+    summaryEntries.length > 0 ||
+    steps.length > 0 ||
+    codegenResponse !== null;
+
+  const clearTaskOutputs = useCallback(() => {
+    setStatusContent("");
+    setResultContent("");
+    setResultPayload(null);
+    setSummaryEntries([]);
+    setSelectedSummaryIndex(0);
+    setSummaryPath(null);
+    setCodegenResponse(null);
+    setSteps([]);
+  }, []);
+
   function closeEditDialog() {
     if (editDialogSaving) {
       return;
@@ -880,6 +899,15 @@ export default function TaskManagementPanel({
           disabled={disableActions}
         >
           Get Task Result
+        </Button>
+        <Button
+          variant="outlined"
+          color="inherit"
+          startIcon={<DeleteOutlineIcon />}
+          onClick={clearTaskOutputs}
+          disabled={!hasTaskOutputs}
+        >
+          Clear Results
         </Button>
       </Stack>
       <JsonOutput title="Status" content={statusContent} />
