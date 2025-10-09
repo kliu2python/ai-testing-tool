@@ -9,6 +9,7 @@ import {
   Chip,
   Collapse,
   Divider,
+  IconButton,
   List,
   ListItem,
   ListItemButton,
@@ -16,6 +17,12 @@ import {
   MenuItem,
   Paper,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   TextField,
   Tooltip,
   Typography
@@ -742,6 +749,22 @@ export default function TaskManagementPanel({
                     const isSelectedGroup = group.runs.some(
                       (run) => run.task_id === trimmedTaskId
                     );
+                    const partitionedRuns = visibleRuns.reduce<{
+                      chipRuns: TaskGroupRun[];
+                      tableRuns: TaskGroupRun[];
+                    }>(
+                      (accumulator, run) => {
+                        if (run.status === "completed" || run.status === "error") {
+                          accumulator.tableRuns.push(run);
+                        } else {
+                          accumulator.chipRuns.push(run);
+                        }
+                        return accumulator;
+                      },
+                      { chipRuns: [], tableRuns: [] }
+                    );
+                    const chipRuns = partitionedRuns.chipRuns;
+                    const tableRuns = partitionedRuns.tableRuns;
 
                     return (
                       <Box key={group.task_name}>
@@ -796,103 +819,229 @@ export default function TaskManagementPanel({
                             <Stack spacing={1.5}>
                               <Typography variant="body2" color="text.secondary">
                                 Select a run to load its status and results. Use the
-                                trash icon on a chip to delete that run.
+                                delete icon to remove that run.
                               </Typography>
-                              <Stack spacing={1} alignItems="flex-start">
-                                <Stack direction="row" spacing={1} flexWrap="wrap">
-                                  {visibleRuns.map((run) => {
-                                    const statusLabel = statusMeta[run.status].label;
-                                    const timestamp = run.updated_at ?? run.created_at;
-                                    const shortTimestamp =
-                                      formatTimestamp(timestamp) ?? "Unknown time";
-                                    const longTimestamp =
-                                      formatTimestamp(timestamp, { long: true }) ??
-                                      "Unknown time";
-                                    const timingPrefix = timestampPrefix(run.status);
-                                    const label = [
-                                      statusLabel,
-                                      shortTimestamp,
-                                      run.task_id
-                                    ].join(" • ");
-                                    const isSelected = trimmedTaskId === run.task_id;
-                                    const canDelete =
-                                      !disableActions && deletingId !== run.task_id;
-                                    return (
-                                      <Tooltip
-                                        key={run.task_id}
-                                        arrow
-                                        title={
-                                          <Stack spacing={0.5}>
-                                            <Typography
-                                              variant="caption"
-                                              component="span"
-                                              color="inherit"
-                                            >
-                                              Status: {statusLabel}
-                                            </Typography>
-                                            <Typography
-                                              variant="caption"
-                                              component="span"
-                                              color="inherit"
-                                            >
-                                              {timingPrefix}: {longTimestamp}
-                                            </Typography>
-                                            <Typography
-                                              variant="caption"
-                                              component="span"
-                                              color="inherit"
-                                            >
-                                              Task ID: {run.task_id}
-                                            </Typography>
-                                            <Typography
-                                              variant="caption"
-                                              component="span"
-                                              color="inherit"
-                                            >
-                                              Click to select or delete.
-                                            </Typography>
-                                          </Stack>
-                                        }
-                                      >
-                                        <Chip
-                                          label={label}
-                                          color={statusMeta[run.status].color}
-                                          size="small"
-                                          variant={
-                                            isSelected || run.status === "pending"
-                                              ? "outlined"
-                                              : "filled"
+                              <Stack spacing={1.5} alignItems="stretch">
+                                {chipRuns.length > 0 ? (
+                                  <Stack direction="row" spacing={1} flexWrap="wrap">
+                                    {chipRuns.map((run) => {
+                                      const statusLabel = statusMeta[run.status].label;
+                                      const timestamp = run.updated_at ?? run.created_at;
+                                      const shortTimestamp =
+                                        formatTimestamp(timestamp) ?? "Unknown time";
+                                      const longTimestamp =
+                                        formatTimestamp(timestamp, { long: true }) ??
+                                        "Unknown time";
+                                      const timingPrefix = timestampPrefix(run.status);
+                                      const label = [
+                                        statusLabel,
+                                        shortTimestamp,
+                                        run.task_id
+                                      ].join(" • ");
+                                      const isSelected = trimmedTaskId === run.task_id;
+                                      const canDelete =
+                                        !disableActions && deletingId !== run.task_id;
+                                      return (
+                                        <Tooltip
+                                          key={run.task_id}
+                                          arrow
+                                          title={
+                                            <Stack spacing={0.5}>
+                                              <Typography
+                                                variant="caption"
+                                                component="span"
+                                                color="inherit"
+                                              >
+                                                Status: {statusLabel}
+                                              </Typography>
+                                              <Typography
+                                                variant="caption"
+                                                component="span"
+                                                color="inherit"
+                                              >
+                                                {timingPrefix}: {longTimestamp}
+                                              </Typography>
+                                              <Typography
+                                                variant="caption"
+                                                component="span"
+                                                color="inherit"
+                                              >
+                                                Task ID: {run.task_id}
+                                              </Typography>
+                                              <Typography
+                                                variant="caption"
+                                                component="span"
+                                                color="inherit"
+                                              >
+                                                Click to select or delete.
+                                              </Typography>
+                                            </Stack>
                                           }
-                                          onClick={() => setTaskId(run.task_id)}
-                                          onDelete={
-                                            canDelete
-                                              ? () => deleteTask(run.task_id)
-                                              : undefined
-                                          }
-                                          deleteIcon={
-                                            <DeleteForeverIcon fontSize="small" />
-                                          }
-                                          sx={{
-                                            mr: 1,
-                                            mb: 1,
-                                            borderStyle: isSelected
-                                              ? "solid"
-                                              : undefined
-                                          }}
-                                        />
-                                      </Tooltip>
-                                    );
-                                  })}
-                                  {isCollapsible && hiddenCount > 0 && !runListExpanded ? (
-                                    <Chip
-                                      label={`+${hiddenCount} more`}
+                                        >
+                                          <Chip
+                                            label={label}
+                                            color={statusMeta[run.status].color}
+                                            size="small"
+                                            variant={
+                                              isSelected || run.status === "pending"
+                                                ? "outlined"
+                                                : "filled"
+                                            }
+                                            onClick={() => setTaskId(run.task_id)}
+                                            onDelete={
+                                              canDelete
+                                                ? () => deleteTask(run.task_id)
+                                                : undefined
+                                            }
+                                            deleteIcon={
+                                              <DeleteForeverIcon fontSize="small" />
+                                            }
+                                            sx={{
+                                              mr: 1,
+                                              mb: 1,
+                                              borderStyle: isSelected
+                                                ? "solid"
+                                                : undefined
+                                            }}
+                                          />
+                                        </Tooltip>
+                                      );
+                                    })}
+                                    {isCollapsible && hiddenCount > 0 && !runListExpanded ? (
+                                      <Chip
+                                        label={`+${hiddenCount} more`}
+                                        size="small"
+                                        color="default"
+                                        variant="outlined"
+                                        sx={{ mr: 1, mb: 1, pointerEvents: "none" }}
+                                      />
+                                    ) : null}
+                                  </Stack>
+                                ) : null}
+                                {tableRuns.length > 0 ? (
+                                  <TableContainer
+                                    component={Box}
+                                    sx={{
+                                      width: "100%",
+                                      border: (theme) => `1px solid ${theme.palette.divider}`,
+                                      borderRadius: 1,
+                                      overflow: "hidden"
+                                    }}
+                                  >
+                                    <Table
                                       size="small"
-                                      color="default"
-                                      variant="outlined"
-                                      sx={{ mr: 1, mb: 1, pointerEvents: "none" }}
-                                    />
-                                  ) : null}
-                                </Stack>
+                                      aria-label={`Completed or errored runs for ${group.task_name}`}
+                                    >
+                                      <TableHead>
+                                        <TableRow>
+                                          <TableCell>Status</TableCell>
+                                          <TableCell>Last Updated</TableCell>
+                                          <TableCell>Task ID</TableCell>
+                                          <TableCell align="right">Actions</TableCell>
+                                        </TableRow>
+                                      </TableHead>
+                                      <TableBody>
+                                        {tableRuns.map((run) => {
+                                          const statusLabel = statusMeta[run.status].label;
+                                          const timestamp = run.updated_at ?? run.created_at;
+                                          const shortTimestamp =
+                                            formatTimestamp(timestamp) ?? "Unknown time";
+                                          const longTimestamp =
+                                            formatTimestamp(timestamp, { long: true }) ??
+                                            "Unknown time";
+                                          const timingPrefix = timestampPrefix(run.status);
+                                          const isSelected = trimmedTaskId === run.task_id;
+                                          const canDelete =
+                                            !disableActions && deletingId !== run.task_id;
+                                          const statusColorKey = statusMeta[run.status].color;
+                                          const statusColor =
+                                            statusColorKey === "default"
+                                              ? "text.primary"
+                                              : `${statusColorKey}.main`;
+                                          return (
+                                            <TableRow
+                                              key={run.task_id}
+                                              hover
+                                              selected={isSelected}
+                                              onClick={() => setTaskId(run.task_id)}
+                                              sx={{ cursor: "pointer" }}
+                                            >
+                                              <TableCell>
+                                                <Typography
+                                                  variant="body2"
+                                                  fontWeight={600}
+                                                  sx={{ color: statusColor }}
+                                                >
+                                                  {statusLabel}
+                                                </Typography>
+                                              </TableCell>
+                                              <TableCell>
+                                                <Tooltip
+                                                  title={`${timingPrefix}: ${longTimestamp}`}
+                                                >
+                                                  <Stack spacing={0.25}>
+                                                    <Typography variant="body2">
+                                                      {shortTimestamp}
+                                                    </Typography>
+                                                    <Typography
+                                                      variant="caption"
+                                                      color="text.secondary"
+                                                    >
+                                                      {timingPrefix}
+                                                    </Typography>
+                                                  </Stack>
+                                                </Tooltip>
+                                              </TableCell>
+                                              <TableCell>
+                                                <Typography
+                                                  variant="body2"
+                                                  sx={{ fontFamily: "Roboto Mono, monospace" }}
+                                                >
+                                                  {run.task_id}
+                                                </Typography>
+                                              </TableCell>
+                                              <TableCell align="right">
+                                                <Stack
+                                                  direction="row"
+                                                  spacing={1}
+                                                  justifyContent="flex-end"
+                                                >
+                                                  <Button
+                                                    size="small"
+                                                    variant="text"
+                                                    onClick={(event) => {
+                                                      event.stopPropagation();
+                                                      setTaskId(run.task_id);
+                                                    }}
+                                                  >
+                                                    Load
+                                                  </Button>
+                                                  <Tooltip title="Delete run">
+                                                    <span>
+                                                      <IconButton
+                                                        aria-label={`delete-run-${run.task_id}`}
+                                                        size="small"
+                                                        disabled={!canDelete}
+                                                        onClick={(event) => {
+                                                          event.stopPropagation();
+                                                          if (canDelete) {
+                                                            void deleteTask(run.task_id);
+                                                          }
+                                                        }}
+                                                      >
+                                                        <DeleteForeverIcon fontSize="small" />
+                                                      </IconButton>
+                                                    </span>
+                                                  </Tooltip>
+                                                </Stack>
+                                              </TableCell>
+                                            </TableRow>
+                                          );
+                                        })}
+                                      </TableBody>
+                                    </Table>
+                                  </TableContainer>
+                                ) : null}
                                 {isCollapsible ? (
                                   <Stack spacing={0.5}>
                                     {!runListExpanded ? (
