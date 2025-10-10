@@ -76,6 +76,7 @@ export interface TaskListEntry {
   task_name: string;
   created_at?: string | null;
   updated_at?: string | null;
+  owner_id?: string | null;
 }
 
 export interface TaskCollectionResponse {
@@ -83,6 +84,20 @@ export interface TaskCollectionResponse {
   pending: TaskListEntry[];
   running: TaskListEntry[];
   error: TaskListEntry[];
+}
+
+export interface TaskStatusCounts {
+  pending: number;
+  running: number;
+  completed: number;
+  error: number;
+}
+
+export interface AdminUserTaskOverview {
+  user: AuthenticatedUser;
+  tasks: TaskCollectionResponse;
+  total_tasks: number;
+  status_counts: TaskStatusCounts;
 }
 
 export interface RunResponse {
