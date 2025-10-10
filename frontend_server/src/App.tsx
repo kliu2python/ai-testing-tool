@@ -33,6 +33,7 @@ import HomeInstructions from "./components/HomeInstructions";
 import RunTaskForm from "./components/RunTaskForm";
 import TaskManagementPanel from "./components/TaskManagementPanel";
 import CodeLibraryPanel from "./components/CodeLibraryPanel";
+import AdminPortal from "./components/AdminPortal";
 import theme from "./theme";
 import type {
   AuthenticatedUser,
@@ -71,6 +72,7 @@ function tabProps(index: number) {
 }
 
 const AUTH_STORAGE_KEY = "backend-server-auth";
+const ADMIN_TAB_INDEX = 4;
 
 export default function App() {
   const [baseUrl, setBaseUrl] = useState<string>(API_BASE_DEFAULT);
@@ -90,6 +92,10 @@ export default function App() {
   const [apiConfigOpen, setApiConfigOpen] = useState(false);
   const lastHealthState = useRef<"success" | "error" | null>(null);
   const isMountedRef = useRef(true);
+  const isAdmin = useMemo(
+    () => user?.role?.toLowerCase() === "admin",
+    [user?.role]
+  );
   const userName = useMemo(() => {
     if (!user) {
       return "";
@@ -204,6 +210,7 @@ export default function App() {
     setUser(null);
     setUserMenuAnchor(null);
     localStorage.removeItem(AUTH_STORAGE_KEY);
+    setActiveTab(0);
   }, []);
 
   const performHealthCheck = useCallback(
@@ -277,6 +284,12 @@ export default function App() {
   const handleManualHealthCheck = useCallback(() => {
     void performHealthCheck(false);
   }, [performHealthCheck]);
+
+  useEffect(() => {
+    if (!isAdmin && activeTab === ADMIN_TAB_INDEX) {
+      setActiveTab(0);
+    }
+  }, [activeTab, isAdmin]);
 
   useEffect(() => {
     void performHealthCheck(true);
@@ -473,6 +486,9 @@ export default function App() {
               <Tab label="Run Tasks" disabled={!token} {...tabProps(1)} />
               <Tab label="Results" disabled={!token} {...tabProps(2)} />
               <Tab label="Code Library" disabled={!token} {...tabProps(3)} />
+              {isAdmin ? (
+                <Tab label="Admin" disabled={!token} {...tabProps(ADMIN_TAB_INDEX)} />
+              ) : null}
             </Tabs>
             <TabPanel value={activeTab} index={0}>
               <HomeInstructions />
@@ -501,6 +517,17 @@ export default function App() {
                 active={activeTab === 3}
               />
             </TabPanel>
+            {isAdmin ? (
+              <TabPanel value={activeTab} index={ADMIN_TAB_INDEX}>
+                <AdminPortal
+                  baseUrl={baseUrl}
+                  token={token}
+                  user={user}
+                  onNotify={showNotification}
+                  active={activeTab === ADMIN_TAB_INDEX}
+                />
+              </TabPanel>
+            ) : null}
           </Stack>
         </Container>
       </Box>
