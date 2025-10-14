@@ -218,6 +218,20 @@ def _get_user_by_email(email: str) -> Optional[sqlite3.Row]:
         conn.close()
 
 
+def _list_all_users() -> List[sqlite3.Row]:
+    """Return all registered users ordered by email."""
+
+    conn = sqlite3.connect(_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.execute(
+            "SELECT id, email, role FROM users ORDER BY email COLLATE NOCASE"
+        )
+        return list(cursor.fetchall())
+    finally:
+        conn.close()
+
+
 def _authenticate_user(email: str, password: str) -> User:
     """Validate credentials and return the authenticated user."""
 
@@ -616,6 +630,10 @@ class TaskListEntry(BaseModel):
         default=None,
         description="ISO 8601 timestamp recording the last known update.",
     )
+    owner_id: Optional[str] = Field(
+        default=None,
+        description="Identifier of the user who owns this task (admin only).",
+    )
 
 
 class TaskCollectionResponse(BaseModel):
@@ -625,6 +643,24 @@ class TaskCollectionResponse(BaseModel):
     pending: List[TaskListEntry] = Field(default_factory=list)
     running: List[TaskListEntry] = Field(default_factory=list)
     error: List[TaskListEntry] = Field(default_factory=list)
+
+
+class TaskStatusCounts(BaseModel):
+    """Simple counter set for task statuses."""
+
+    pending: int = 0
+    running: int = 0
+    completed: int = 0
+    error: int = 0
+
+
+class AdminUserTaskOverview(BaseModel):
+    """Administrative payload describing a user's tasks."""
+
+    user: UserResponse
+    tasks: TaskCollectionResponse
+    total_tasks: int
+    status_counts: TaskStatusCounts
 
 
 # -----------------------------
@@ -1254,8 +1290,26 @@ async def _fetch_task_status(
     )
 
 
-async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
-    """Return all known task identifiers grouped by their status."""
+async def _collect_tasks_by_status(
+    user: User,
+    owner_id: Optional[str] = None,
+    *,
+    include_owner: bool = False,
+) -> TaskCollectionResponse:
+    """Return known task identifiers grouped by status with optional filtering."""
+
+    if owner_id is not None and not user.is_admin and owner_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorised to view tasks for this user",
+        )
+
+    owner_filter = (
+        owner_id
+        if owner_id is not None
+        else (None if user.is_admin else user.id)
+    )
+    reveal_owner = include_owner or (owner_filter is None and user.is_admin)
 
     redis = _redis_client()
     prefix = status_key("")
@@ -1265,7 +1319,7 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
         "running": [],
         "error": [],
     }
-    redis_statuses: Dict[str, str] = {}
+    redis_records: Dict[str, Dict[str, Optional[str]]] = {}
 
     try:
         async for key in redis.scan_iter(match=f"{prefix}*"):
@@ -1273,32 +1327,46 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
             if raw_status is None:
                 continue
             data = load_status(raw_status)
-            owner_id = data.get("user_id")
-            if not user.is_admin and owner_id != user.id:
+            task_owner = data.get("user_id")
+            if owner_filter is not None and task_owner != owner_filter:
                 continue
 
             status_value = data.get("status")
             task_id = key.removeprefix(prefix)
             if status_value:
-                redis_statuses[task_id] = status_value
+                redis_records[task_id] = {
+                    "status": status_value,
+                    "owner_id": task_owner,
+                }
     except Exception as exc:  # pragma: no cover - operational failure
         raise HTTPException(
             status_code=503, detail=f"Failed to list tasks: {exc}"
         ) from exc
 
     try:
-        records = list_task_runs_for_user(None if user.is_admin else user.id)
+        records = list_task_runs_for_user(owner_filter)
     except sqlite3.Error as exc:  # pragma: no cover - operational failure
         raise HTTPException(
             status_code=503, detail=f"Failed to load stored tasks: {exc}"
         ) from exc
 
-    all_task_ids: Set[str] = set(redis_statuses)
+    all_task_ids: Set[str] = set(redis_records)
     for record in records:
         all_task_ids.add(record["id"])
 
     metadata = load_task_metadata(tuple(all_task_ids))
     record_lookup = {record["id"]: record for record in records}
+
+    def _resolve_owner(task_id: str) -> Optional[str]:
+        record = record_lookup.get(task_id)
+        if record is not None and record.get("user_id"):
+            return record.get("user_id")
+        redis_info = redis_records.get(task_id)
+        if redis_info is not None and redis_info.get("owner_id"):
+            return redis_info.get("owner_id")
+        if owner_filter is not None:
+            return owner_filter
+        return None
 
     def _entry(task_id: str) -> TaskListEntry:
         info = metadata.get(task_id, {})
@@ -1311,9 +1379,11 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
             task_name=name,
             created_at=created_at,
             updated_at=updated_at,
+            owner_id=_resolve_owner(task_id) if reveal_owner else None,
         )
 
-    for task_id, status_value in redis_statuses.items():
+    for task_id, redis_info in redis_records.items():
+        status_value = redis_info.get("status")
         if status_value == TaskStatus.completed.value:
             grouped["completed"].append(_entry(task_id))
         elif status_value == TaskStatus.pending.value:
@@ -1325,7 +1395,7 @@ async def _collect_tasks_by_status(user: User) -> TaskCollectionResponse:
 
     for record in records:
         task_id = record["id"]
-        if task_id in redis_statuses:
+        if task_id in redis_records:
             continue
         status_value = record.get("status", TaskStatus.pending.value)
         if status_value == TaskStatus.completed.value:
@@ -1418,6 +1488,53 @@ async def list_tasks(
     """Return the collection of task identifiers grouped by their status."""
 
     return await _collect_tasks_by_status(current_user)
+
+
+@app.get(
+    "/admin/users",
+    response_model=List[AdminUserTaskOverview],
+    summary="List all users with their task status summaries",
+)
+async def list_users_for_admin(
+    current_user: User = Depends(get_admin_user),
+) -> List[AdminUserTaskOverview]:
+    """Return administrative task overviews for each registered user."""
+
+    try:
+        rows = _list_all_users()
+    except sqlite3.Error as exc:  # pragma: no cover - defensive guard
+        raise HTTPException(
+            status_code=503, detail=f"Failed to load users: {exc}"
+        ) from exc
+
+    overviews: List[AdminUserTaskOverview] = []
+    for row in rows:
+        user_record = _row_to_user(row)
+        tasks = await _collect_tasks_by_status(
+            current_user, owner_id=user_record.id, include_owner=True
+        )
+        counts = TaskStatusCounts(
+            pending=len(tasks.pending),
+            running=len(tasks.running),
+            completed=len(tasks.completed),
+            error=len(tasks.error),
+        )
+        total = (
+            counts.pending
+            + counts.running
+            + counts.completed
+            + counts.error
+        )
+        overviews.append(
+            AdminUserTaskOverview(
+                user=_user_payload(user_record),
+                tasks=tasks,
+                total_tasks=total,
+                status_counts=counts,
+            )
+        )
+
+    return overviews
 
 
 @app.get(
