@@ -38,6 +38,10 @@ import yaml
 from dotenv import load_dotenv
 
 from backend_server.libraries.taas.dhub import Dhub
+from backend_server.web.chrome_devtools import (
+    ChromeDevToolsMCPDriver,
+    ChromeDevToolsMCPError,
+)
 from backend_server.logging_config import configure_logging
 
 load_dotenv()
@@ -550,12 +554,33 @@ def create_driver(_server, _platform="android",
             raise
 
     if platform == "web":
+        backend_choice = (os.getenv("WEB_AUTOMATION_BACKEND") or "mcp").strip().lower()
+        if backend_choice not in {"mcp", "mcp-strict", "selenium"}:
+            backend_choice = "mcp"
+
+        if backend_choice in {"mcp", "mcp-strict"}:
+            try:
+                driver = ChromeDevToolsMCPDriver()
+            except ChromeDevToolsMCPError as exc:
+                if backend_choice == "mcp-strict":
+                    raise
+                logger.warning(
+                    "chrome-devtools-mcp unavailable (%s); falling back to Selenium backend",
+                    exc,
+                )
+            else:
+                logger.info(
+                    "Using chrome-devtools-mcp for web automation via %s",
+                    driver.server_url,
+                )
+                return driver
+
         dhub_obj = Dhub(
             browser="chrome",
             version="125.0",
-            resolutions='1920x1080',
-            ram='6Gi'
-            )
+            resolutions="1920x1080",
+            ram="6Gi",
+        )
         dhub_obj.create_selenium_pod()
         count = 20
         node_ready = False
@@ -568,12 +593,13 @@ def create_driver(_server, _platform="android",
             sleep(3)
             count -= 1
         if not node_ready:
-            raise WebDriverException('WebDriver is not ready')
+            raise WebDriverException("WebDriver is not ready")
         chrome_options = ChromeOptions()
         chrome_options.platform_name = "linux"
-        chrome_options.browser_version = '125.0'
-        chrome_options.set_capability('nodename:applicationName',
-                                      dhub_obj.node_name)
+        chrome_options.browser_version = "125.0"
+        chrome_options.set_capability(
+            "nodename:applicationName", dhub_obj.node_name
+        )
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--ignore-certificate-errors")
         chrome_options.add_argument("--remote-debugging-pipe")
@@ -582,8 +608,8 @@ def create_driver(_server, _platform="android",
         chrome_options.set_capability("acceptInsecureCerts", True)
         return selenium_webdriver.Remote(
             command_executor="http://10.160.24.17:31590",
-            options=chrome_options
-            )
+            options=chrome_options,
+        )
 
     raise ValueError(f"Unsupported platform: {_platform}")
 
@@ -642,11 +668,20 @@ def _prepare_target_contexts(
                 raise ValueError(f"Duplicate target alias '{alias}'")
 
             driver = create_driver(target_server, target_platform)
-            driver.implicitly_wait(0.2)
-            keepalive_thread = threading.Thread(
-                target=lambda d=driver: keep_driver_live(d), daemon=True
-            )
-            keepalive_thread.start()
+            if hasattr(driver, "implicitly_wait"):
+                try:
+                    driver.implicitly_wait(0.2)
+                except Exception:
+                    logger.debug("Driver %s does not support implicitly_wait", driver)
+
+            keepalive_thread: Optional[threading.Thread]
+            if isinstance(driver, ChromeDevToolsMCPDriver):
+                keepalive_thread = None
+            else:
+                keepalive_thread = threading.Thread(
+                    target=lambda d=driver: keep_driver_live(d), daemon=True
+                )
+                keepalive_thread.start()
 
             ctx = TargetContext(
                 name=alias,
@@ -1030,8 +1065,15 @@ def _switch_if_new_window(driver, before_handles):
 
 
 def take_page_source(driver, folder: str, name: str):
-    xml_or_html_path = f"{folder}/{name}.xml"  # will switch to .html for web
     yaml_path = f"{folder}/{name}.yaml"
+
+    if isinstance(driver, ChromeDevToolsMCPDriver):
+        html = driver.get_page_source()
+        html_path = f"{folder}/{name}.html"
+        write_to_file(html_path, html)
+        return html_str_to_yaml(yaml_path, html)
+
+    xml_or_html_path = f"{folder}/{name}.xml"  # will switch to .html for web
     src = _safe_page_source(driver)
 
     platform = _detect_platform_from_driver(driver) or _detect_platform_from_xml(src)
@@ -1043,16 +1085,23 @@ def take_page_source(driver, folder: str, name: str):
         html_path = f"{folder}/{name}.html"
         write_to_file(html_path, src)
         return html_str_to_yaml(yaml_path, src)
-    else:
-        # Mobile (Android/iOS) – save XML and YAML as before
-        write_to_file(xml_or_html_path, src)
-        return xml_str_to_yaml(yaml_path, src, platform=platform)
+
+    # Mobile (Android/iOS) – save XML and YAML as before
+    write_to_file(xml_or_html_path, src)
+    return xml_str_to_yaml(yaml_path, src, platform=platform)
 
 
 def take_screenshot(driver: webdriver.Remote, folder, name):
-    driver.save_screenshot(f"{folder}/{name}.png")
-    format_image(f"{folder}/{name}.png", f"{folder}/{name}.jpg")
-    return f"{folder}/{name}.jpg"
+    png_path = f"{folder}/{name}.png"
+    jpg_path = f"{folder}/{name}.jpg"
+    if isinstance(driver, ChromeDevToolsMCPDriver):
+        driver.save_screenshot(png_path)
+        format_image(png_path, jpg_path)
+        return jpg_path
+
+    driver.save_screenshot(png_path)
+    format_image(png_path, jpg_path)
+    return jpg_path
 
 
 # -----------------------------
@@ -1261,6 +1310,35 @@ def process_next_action(action, driver: webdriver.Remote, folder, step_name):
     logger.info(f"!!Action is {action}")
     data = safe_json_loads(action)
     platform = _get_platform(driver)
+    if isinstance(driver, ChromeDevToolsMCPDriver):
+        if data["action"] in ("error", "finish"):
+            data["result"] = "success"
+            return (
+                take_page_source(driver, folder, step_name),
+                take_screenshot(driver, folder, step_name),
+                json.dumps(data),
+            )
+
+        try:
+            response = driver.perform_action(data)
+            if isinstance(response, dict):
+                status = (
+                    response.get("result")
+                    or response.get("status")
+                    or response.get("outcome")
+                )
+                if status:
+                    data["result"] = status
+            if "result" not in data:
+                data["result"] = "success"
+        except ChromeDevToolsMCPError as exc:
+            data["result"] = f"chrome-devtools-mcp error: {exc}"
+
+        return (
+            take_page_source(driver, folder, step_name),
+            take_screenshot(driver, folder, step_name),
+            json.dumps(data),
+        )
     if data["action"] in ("error", "finish"):
         take_page_source(driver, folder, step_name)
         take_screenshot(driver, folder, step_name)
