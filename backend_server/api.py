@@ -27,6 +27,28 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field, ValidationError, model_validator
 from redis.asyncio import Redis
 
+try:  # pragma: no cover - optional dependency guard
+    from langchain_openai import ChatOpenAI
+except ImportError:  # pragma: no cover - fallback for offline environments
+    ChatOpenAI = None  # type: ignore[assignment]
+
+from backend_server.agents import (
+    DeviceDescriptor,
+    EmailAgent,
+    EmailMessage,
+    ImapEmailClient,
+    InMemoryEmailClient,
+    MOBILE_AGENT_SYSTEM_PROMPT,
+    MobileAutomationRunner,
+    MobileProxyClient,
+    MobileTestAgent,
+    MultiAgentOrchestrator,
+    QAReporterAgent,
+    TestStatus,
+    WorkflowConfig,
+    WorkflowStatus,
+)
+
 from backend_server.example_bootstrap import (
     hash_task,
     load_example_config,
@@ -198,6 +220,47 @@ def _create_user(email: str, password: str) -> User:
         conn.close()
 
     return User(id=user_id, email=email.lower(), role="user")
+
+
+def _build_langchain_llm(model_name: Optional[str], temperature: float) -> ChatOpenAI:
+    """Instantiate a ``ChatOpenAI`` client using repository defaults."""
+
+    if ChatOpenAI is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="langchain-openai is not installed in this environment",
+        )
+
+    resolved_model = (
+        model_name
+        or os.getenv("LANGCHAIN_DEFAULT_MODEL")
+        or os.getenv("OPENAI_MODEL")
+        or "gpt-4o-mini"
+    )
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="OPENAI_API_KEY environment variable must be configured",
+        )
+
+    base_url = os.getenv("OPENAI_BASE_URL")
+    client_kwargs = {"model": resolved_model, "temperature": temperature, "api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    return ChatOpenAI(**client_kwargs)
+
+
+def _payload_to_email(payload: "RawEmailPayload") -> EmailMessage:
+    """Convert API payload into the internal email representation."""
+
+    return EmailMessage(
+        subject=payload.subject,
+        sender=payload.sender,
+        body=payload.body,
+        received_at=payload.received_at,
+        message_id=payload.message_id,
+    )
 
 
 def _get_user_by_email(email: str) -> Optional[sqlite3.Row]:
@@ -475,6 +538,79 @@ class RunResponse(BaseModel):
 
     task_id: str
     task_ids: List[str]
+
+
+class RawEmailPayload(BaseModel):
+    """Serialized representation of an email message for the orchestrator."""
+
+    subject: str
+    sender: EmailStr
+    body: str
+    received_at: dt.datetime
+    message_id: Optional[str] = None
+
+
+class ImapConfig(BaseModel):
+    """IMAP/SMTP credentials used to fetch and send emails."""
+
+    host: str
+    username: str
+    password: str
+    mailbox: str = "INBOX"
+    use_ssl: bool = True
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+
+
+class DeviceConfig(BaseModel):
+    """Device metadata sourced from the mobile proxy."""
+
+    name: str
+    platform: str
+    server: str
+    os_version: Optional[str] = None
+    model: Optional[str] = None
+
+
+class MultiAgentRequest(BaseModel):
+    """Request payload for the LangChain multi-agent workflow."""
+
+    customer_email: EmailStr
+    devices: List[DeviceConfig]
+    emails: Optional[List[RawEmailPayload]] = None
+    imap: Optional[ImapConfig] = None
+    subject_keywords: Optional[List[str]] = None
+    max_emails: int = Field(5, ge=1, le=50)
+    reports_folder: Optional[str] = None
+    prompt: Optional[str] = None
+    llm_model: Optional[str] = None
+    temperature: float = Field(0.0, ge=0.0, le=1.0)
+    llm_mode: Optional[str] = Field(
+        default=None,
+        description="Override the LLM mode for the automation runner (text/vision).",
+    )
+
+    @model_validator(mode="after")
+    def _ensure_email_source(self) -> "MultiAgentRequest":
+        if not self.emails and not self.imap:
+            raise ValueError("Provide either inline 'emails' data or IMAP credentials")
+        return self
+
+
+class MultiAgentResponse(BaseModel):
+    """Response payload summarising the orchestrated workflow."""
+
+    status: WorkflowStatus
+    report: str
+    actions: List[str]
+    follow_up_email: Optional[str] = None
+    resolution_email: Optional[str] = None
+    test_status: Optional[TestStatus] = None
+    test_details: Optional[str] = None
+    missing_information: Optional[List[str]] = None
+    known_issue_reference: Optional[str] = None
+    troubleshoot_reference: Optional[str] = None
+    report_path: Optional[str] = None
 
 
 class PytestCodegenRequest(BaseModel):
@@ -843,6 +979,87 @@ async def run_automation(
         task_ids.append(task_id)
 
     return RunResponse(task_id=task_ids[0], task_ids=task_ids)
+
+
+@app.post(
+    "/multi-agent/run",
+    response_model=MultiAgentResponse,
+    summary="Trigger the LangChain multi-agent workflow",
+)
+async def run_multi_agent_workflow(
+    request: MultiAgentRequest,
+    current_user: User = Depends(get_current_user),
+) -> MultiAgentResponse:
+    """Execute the end-to-end workflow across email, mobile testing, and reporting."""
+
+    logger.info(
+        "User %s is launching multi-agent workflow for %s", current_user.email, request.customer_email
+    )
+
+    if request.emails:
+        email_client = InMemoryEmailClient(_payload_to_email(msg) for msg in request.emails)
+    elif request.imap:
+        email_client = ImapEmailClient(
+            imap_host=request.imap.host,
+            username=request.imap.username,
+            password=request.imap.password,
+            mailbox=request.imap.mailbox,
+            use_ssl=request.imap.use_ssl,
+            smtp_host=request.imap.smtp_host,
+            smtp_port=request.imap.smtp_port,
+        )
+    else:  # pragma: no cover - guarded by validator
+        raise HTTPException(status_code=400, detail="Email source is required")
+
+    llm = _build_langchain_llm(request.llm_model, request.temperature)
+    email_agent = EmailAgent(email_client, llm)
+
+    devices = [
+        DeviceDescriptor(
+            name=device.name,
+            platform=device.platform,
+            server=device.server,
+            os_version=device.os_version,
+            model=device.model,
+        )
+        for device in request.devices
+    ]
+    proxy_client = MobileProxyClient(devices)
+
+    reports_folder = request.reports_folder or str(_REPORTS_ROOT)
+    prompt = request.prompt or MOBILE_AGENT_SYSTEM_PROMPT
+    automation_runner = MobileAutomationRunner(prompt, reports_folder)
+    mobile_agent = MobileTestAgent(proxy_client, automation_runner, llm_mode=request.llm_mode)
+
+    reporter_agent = QAReporterAgent(llm)
+    orchestrator = MultiAgentOrchestrator(
+        email_agent,
+        mobile_agent,
+        reporter_agent,
+        WorkflowConfig(
+            issue_subject_keywords=request.subject_keywords,
+            max_emails=request.max_emails,
+        ),
+    )
+
+    result = await orchestrator.run(request.customer_email)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No matching email found")
+
+    outcome = result.outcome
+    return MultiAgentResponse(
+        status=result.status,
+        report=result.report,
+        actions=result.actions,
+        follow_up_email=result.follow_up_email,
+        resolution_email=result.resolution_email,
+        test_status=outcome.status if outcome else None,
+        test_details=outcome.details if outcome else None,
+        missing_information=outcome.missing_information if outcome else None,
+        known_issue_reference=outcome.known_issue_reference if outcome else None,
+        troubleshoot_reference=outcome.troubleshoot_reference if outcome else None,
+        report_path=outcome.report_path if outcome else None,
+    )
 
 
 @app.post(

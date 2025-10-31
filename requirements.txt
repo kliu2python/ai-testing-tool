@@ -10,4 +10,7 @@ httpx
 pydantic[email]
 dotenv
 requests
+langchain
+langchain-core
+langchain-openai
 pytest
