@@ -114,6 +114,7 @@ export default function SubscriptionPortal({
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formState, setFormState] = useState<SubscriptionFormState>(EMPTY_FORM);
+  const [keywordInput, setKeywordInput] = useState("");
   const [functionSelections, setFunctionSelections] = useState<string[]>(
     EMPTY_FORM.enabled_functions ?? []
   );
@@ -176,6 +177,7 @@ export default function SubscriptionPortal({
     setFormState(EMPTY_FORM);
     setFunctionSelections(EMPTY_FORM.enabled_functions ?? []);
     setImapHostOption("custom");
+    setKeywordInput("");
     setEditorOpen(true);
   };
 
@@ -194,6 +196,7 @@ export default function SubscriptionPortal({
     });
     setFunctionSelections(subscription.enabled_functions);
     setImapHostOption(providerOption);
+    setKeywordInput(keywordsToString(subscription.subject_keywords));
     setEditorOpen(true);
   };
 
@@ -226,6 +229,7 @@ export default function SubscriptionPortal({
     if (!token) {
       return;
     }
+    const subjectKeywords = sanitizeKeywords(keywordInput);
     const payload: SubscriptionPayload = {
       mailbox_email: formState.mailbox_email.trim(),
       imap_host: formState.imap_host.trim(),
@@ -233,9 +237,7 @@ export default function SubscriptionPortal({
       imap_password: formState.imap_password,
       mailbox: formState.mailbox || "INBOX",
       use_ssl: formState.use_ssl ?? true,
-      subject_keywords: Array.isArray(formState.subject_keywords)
-        ? formState.subject_keywords
-        : [],
+      subject_keywords: subjectKeywords,
       enabled_functions: functionSelections
     };
 
@@ -263,6 +265,7 @@ export default function SubscriptionPortal({
       setFormState(EMPTY_FORM);
       setFunctionSelections(EMPTY_FORM.enabled_functions ?? []);
       setImapHostOption("custom");
+      setKeywordInput("");
       void fetchSubscriptions();
     } else {
       onNotify({
@@ -278,10 +281,6 @@ export default function SubscriptionPortal({
         ? prev.filter((item) => item !== value)
         : [...prev, value]
     );
-  };
-
-  const handleKeywordChange = (value: string) => {
-    setFormState((prev) => ({ ...prev, subject_keywords: sanitizeKeywords(value) }));
   };
 
   const handleRunSubscription = (subscription: SubscriptionRecord) => {
@@ -590,10 +589,10 @@ export default function SubscriptionPortal({
             </Grid>
             <Grid item xs={12}>
               <TextField
-                label="Subject keywords"
+                label="Email keywords"
                 fullWidth
-                value={keywordsToString(formState.subject_keywords ?? [])}
-                onChange={(event) => handleKeywordChange(event.target.value)}
+                value={keywordInput}
+                onChange={(event) => setKeywordInput(event.target.value)}
                 helperText="Separate keywords with commas or new lines"
               />
             </Grid>
@@ -631,7 +630,7 @@ export default function SubscriptionPortal({
         <DialogContent dividers>
           <Stack spacing={2}>
             <TextField
-              label="Subject keywords"
+              label="Email keywords"
               fullWidth
               value={runKeywords}
               onChange={(event) => setRunKeywords(event.target.value)}
