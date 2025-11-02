@@ -180,8 +180,6 @@ export interface SubscriptionPayload {
   imap_password?: string;
   mailbox?: string;
   use_ssl?: boolean;
-  smtp_host?: string | null;
-  smtp_port?: number | null;
   subject_keywords: string[];
   enabled_functions?: string[] | null;
 }
@@ -193,8 +191,6 @@ export interface SubscriptionRecord {
   imap_username: string;
   mailbox: string;
   use_ssl: boolean;
-  smtp_host?: string | null;
-  smtp_port?: number | null;
   subject_keywords: string[];
   enabled_functions: string[];
   created_at: string;

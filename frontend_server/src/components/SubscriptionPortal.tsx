@@ -15,6 +15,7 @@ import {
   FormControlLabel,
   Grid,
   IconButton,
+  MenuItem,
   Stack,
   Switch,
   TextField,
@@ -50,6 +51,15 @@ const WORKFLOW_FUNCTION_OPTIONS: { value: string; label: string }[] = [
   { value: "create_mantis_ticket", label: "Create Mantis ticket" }
 ];
 
+const IMAP_PROVIDER_OPTIONS = [
+  { value: "google", label: "Google", host: "imap.gmail.com" },
+  { value: "hotmail", label: "Hotmail", host: "imap-mail.outlook.com" },
+  { value: "outlook", label: "Outlook", host: "outlook.office365.com" },
+  { value: "custom", label: "Custom", host: "" }
+] as const;
+
+type ImapProviderOption = (typeof IMAP_PROVIDER_OPTIONS)[number]["value"];
+
 interface SubscriptionPortalProps {
   baseUrl: string;
   token: string | null;
@@ -77,8 +87,6 @@ const EMPTY_FORM: SubscriptionFormState = {
   imap_password: "",
   mailbox: "INBOX",
   use_ssl: true,
-  smtp_host: "",
-  smtp_port: undefined,
   subject_keywords: [],
   enabled_functions: WORKFLOW_FUNCTION_OPTIONS.map((option) => option.value)
 };
@@ -119,6 +127,17 @@ export default function SubscriptionPortal({
   const [selectedSubscriptionId, setSelectedSubscriptionId] = useState<string | null>(
     null
   );
+  const [imapHostOption, setImapHostOption] = useState<ImapProviderOption>(
+    "custom"
+  );
+
+  const resolveImapHostOption = (host: string): ImapProviderOption => {
+    const normalizedHost = host.trim().toLowerCase();
+    const match = IMAP_PROVIDER_OPTIONS.find(
+      (option) => option.host?.toLowerCase() === normalizedHost
+    );
+    return match ? match.value : "custom";
+  };
 
   const canEdit = Boolean(user);
 
@@ -156,10 +175,12 @@ export default function SubscriptionPortal({
     setEditingId(null);
     setFormState(EMPTY_FORM);
     setFunctionSelections(EMPTY_FORM.enabled_functions ?? []);
+    setImapHostOption("custom");
     setEditorOpen(true);
   };
 
   const handleEdit = (subscription: SubscriptionRecord) => {
+    const providerOption = resolveImapHostOption(subscription.imap_host);
     setEditingId(subscription.id);
     setFormState({
       mailbox_email: subscription.mailbox_email,
@@ -167,13 +188,12 @@ export default function SubscriptionPortal({
       imap_username: subscription.imap_username,
       mailbox: subscription.mailbox,
       use_ssl: subscription.use_ssl,
-      smtp_host: subscription.smtp_host ?? "",
-      smtp_port: subscription.smtp_port ?? undefined,
       subject_keywords: subscription.subject_keywords,
       enabled_functions: subscription.enabled_functions,
       imap_password: ""
     });
     setFunctionSelections(subscription.enabled_functions);
+    setImapHostOption(providerOption);
     setEditorOpen(true);
   };
 
@@ -213,8 +233,6 @@ export default function SubscriptionPortal({
       imap_password: formState.imap_password,
       mailbox: formState.mailbox || "INBOX",
       use_ssl: formState.use_ssl ?? true,
-      smtp_host: formState.smtp_host || undefined,
-      smtp_port: formState.smtp_port,
       subject_keywords: Array.isArray(formState.subject_keywords)
         ? formState.subject_keywords
         : [],
@@ -244,6 +262,7 @@ export default function SubscriptionPortal({
       setEditorOpen(false);
       setFormState(EMPTY_FORM);
       setFunctionSelections(EMPTY_FORM.enabled_functions ?? []);
+      setImapHostOption("custom");
       void fetchSubscriptions();
     } else {
       onNotify({
@@ -473,15 +492,62 @@ export default function SubscriptionPortal({
             </Grid>
             <Grid item xs={12} md={6}>
               <TextField
-                label="IMAP host"
+                label="IMAP provider"
+                select
                 fullWidth
                 required
-                value={formState.imap_host}
-                onChange={(event) =>
-                  setFormState((prev) => ({ ...prev, imap_host: event.target.value }))
-                }
-              />
+                value={imapHostOption}
+                onChange={(event) => {
+                  const nextOption = event.target.value as ImapProviderOption;
+                  setImapHostOption(nextOption);
+                  if (nextOption === "custom") {
+                    setFormState((prev) => ({ ...prev }));
+                  } else {
+                    const provider = IMAP_PROVIDER_OPTIONS.find(
+                      (option) => option.value === nextOption
+                    );
+                    if (provider?.host) {
+                      setFormState((prev) => ({
+                        ...prev,
+                        imap_host: provider.host
+                      }));
+                    }
+                  }
+                }}
+              >
+                {IMAP_PROVIDER_OPTIONS.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </TextField>
             </Grid>
+            {imapHostOption === "custom" ? (
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="IMAP host"
+                  fullWidth
+                  required
+                  value={formState.imap_host}
+                  onChange={(event) =>
+                    setFormState((prev) => ({
+                      ...prev,
+                      imap_host: event.target.value
+                    }))
+                  }
+                />
+              </Grid>
+            ) : (
+              <Grid item xs={12} md={6}>
+                <TextField
+                  label="IMAP host"
+                  fullWidth
+                  required
+                  value={formState.imap_host}
+                  InputProps={{ readOnly: true }}
+                />
+              </Grid>
+            )}
             <Grid item xs={12} md={6}>
               <TextField
                 label="IMAP password or app password"
@@ -520,27 +586,6 @@ export default function SubscriptionPortal({
                   />
                 }
                 label="Use SSL"
-              />
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <TextField
-                label="SMTP host"
-                fullWidth
-                value={formState.smtp_host ?? ""}
-                onChange={(event) =>
-                  setFormState((prev) => ({ ...prev, smtp_host: event.target.value }))
-                }
-              />
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <TextField
-                label="SMTP port"
-                type="number"
-                fullWidth
-                value={formState.smtp_port ?? ""}
-                onChange={(event) =>
-                  setFormState((prev) => ({ ...prev, smtp_port: Number(event.target.value) || undefined }))
-                }
               />
             </Grid>
             <Grid item xs={12}>
