@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from .data_models import (
     BugTicket,
@@ -43,12 +43,15 @@ class MultiAgentOrchestrator:
         reporter_agent: QAReporterAgent,
         config: Optional[WorkflowConfig] = None,
         mantis_builder: Optional[MantisTicketBuilder] = None,
+        *,
+        style_examples: Optional[Dict[str, List[str]]] = None,
     ) -> None:
         self.email_agent = email_agent
         self.mobile_agent = mobile_agent
         self.reporter_agent = reporter_agent
         self.config = config or WorkflowConfig()
         self.mantis_builder = mantis_builder or MantisTicketBuilder()
+        self.style_examples = style_examples or {}
 
     async def run(self, customer_email: Optional[str]) -> Optional[WorkflowResult]:
         criteria = EmailSearchCriteria(
@@ -67,11 +70,19 @@ class MultiAgentOrchestrator:
         if missing:
             logger.info("Issue missing required fields: %s", missing)
             if self._is_enabled(WorkflowFunction.REQUEST_DETAILS):
-                follow_up = self.email_agent.compose_follow_up(issue, missing)
+                follow_up = self.email_agent.compose_follow_up(
+                    issue,
+                    missing,
+                    style_examples=self._examples("follow_up_email"),
+                )
                 self.email_agent.send_email(
                     issue.customer_email, "Request for additional information", follow_up
                 )
-                report = self.reporter_agent.generate_pending_report(issue, missing)
+                report = self.reporter_agent.generate_pending_report(
+                    issue,
+                    missing,
+                    style_examples=self._examples("qa_report"),
+                )
                 return self._build_result(
                     status=WorkflowStatus.AWAITING_CUSTOMER,
                     issue=issue,
@@ -82,7 +93,11 @@ class MultiAgentOrchestrator:
                     actions=["requested_additional_information"],
                     mantis=None,
                 )
-            report = self.reporter_agent.generate_pending_report(issue, missing)
+            report = self.reporter_agent.generate_pending_report(
+                issue,
+                missing,
+                style_examples=self._examples("qa_report"),
+            )
             return self._build_result(
                 status=WorkflowStatus.ESCALATED,
                 issue=issue,
@@ -107,13 +122,17 @@ class MultiAgentOrchestrator:
         if outcome.status == TestStatus.MISSING_INFORMATION:
             if self._is_enabled(WorkflowFunction.REQUEST_DETAILS):
                 follow_up = self.email_agent.compose_follow_up(
-                    issue, outcome.missing_information or ["additional details"]
+                    issue,
+                    outcome.missing_information or ["additional details"],
+                    style_examples=self._examples("follow_up_email"),
                 )
                 self.email_agent.send_email(
                     issue.customer_email, "Request for additional information", follow_up
                 )
                 report = self.reporter_agent.generate_pending_report(
-                    issue, outcome.missing_information or ["additional details"]
+                    issue,
+                    outcome.missing_information or ["additional details"],
+                    style_examples=self._examples("qa_report"),
                 )
                 return self._build_result(
                     status=WorkflowStatus.AWAITING_CUSTOMER,
@@ -126,7 +145,9 @@ class MultiAgentOrchestrator:
                     mantis=None,
                 )
             report = self.reporter_agent.generate_pending_report(
-                issue, outcome.missing_information or ["additional details"]
+                issue,
+                outcome.missing_information or ["additional details"],
+                style_examples=self._examples("qa_report"),
             )
             return self._build_result(
                 status=WorkflowStatus.ESCALATED,
@@ -145,11 +166,19 @@ class MultiAgentOrchestrator:
             TestStatus.TROUBLESHOOT_AVAILABLE,
             TestStatus.NOT_RUN,
         }:
-            report = self.reporter_agent.generate_report(issue, outcome)
+            report = self.reporter_agent.generate_report(
+                issue,
+                outcome,
+                style_examples=self._examples("qa_report"),
+            )
             resolution: Optional[str] = None
             if self._is_enabled(WorkflowFunction.PUBLIC_RESPONSE) and outcome.status != TestStatus.NOT_RUN:
                 summary = self._render_outcome_summary(outcome)
-                resolution = self.email_agent.compose_resolution(issue, summary)
+                resolution = self.email_agent.compose_resolution(
+                    issue,
+                    summary,
+                    style_examples=self._examples("resolution_email"),
+                )
                 self.email_agent.send_email(issue.customer_email, "Test results update", resolution)
             return self._build_result(
                 status=WorkflowStatus.RESOLVED,
@@ -163,7 +192,11 @@ class MultiAgentOrchestrator:
             )
 
         # Failed or uncertain -> escalate
-        report = self.reporter_agent.generate_report(issue, outcome)
+        report = self.reporter_agent.generate_report(
+            issue,
+            outcome,
+            style_examples=self._examples("qa_report"),
+        )
         return self._build_result(
             status=WorkflowStatus.ESCALATED,
             issue=issue,
@@ -192,7 +225,14 @@ class MultiAgentOrchestrator:
     def _maybe_build_ticket(self, issue: CustomerIssue, outcome: Optional[TestOutcome]) -> Optional[BugTicket]:
         if not self._is_enabled(WorkflowFunction.CREATE_MANTIS_TICKET):
             return None
-        return self.mantis_builder.build(issue, outcome)
+        return self.mantis_builder.build(
+            issue,
+            outcome,
+            style_examples=self._examples("mantis_ticket"),
+        )
+
+    def _examples(self, key: str) -> List[str]:
+        return list(self.style_examples.get(key) or [])
 
     def _build_result(
         self,

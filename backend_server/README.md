@@ -228,6 +228,15 @@ automation features the platform should run. The portal flow looks like this:
    reproduction steps, and severity recommendation that can be pushed directly
    into your bug tracker.
 
+Every time the orchestrator runs the backend stores a structured copy of the
+workflow response. You can retrieve historic executions with `GET /workflows`
+and pull aggregated status counts via `GET /dashboard/metrics`. Human reviewers
+can submit 1–5 star feedback for any generated artefact (follow-up emails,
+resolution emails, QA reports, or Mantis tickets) using `POST /ratings`. The
+highest rated examples are automatically fed back into the email and reporting
+prompts as style guidance so future responses adopt the tone and structure that
+your team prefers.
+
 All secrets are encrypted at rest using the `SUBSCRIPTION_SECRET_KEY`
 environment variable. Generate a key with
 

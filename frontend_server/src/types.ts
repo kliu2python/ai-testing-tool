@@ -9,6 +9,17 @@ export interface ApiResult<T = unknown> {
 
 export type LlmMode = "auto" | "text" | "vision";
 
+export type WorkflowStatus = "resolved" | "awaiting_customer" | "escalated";
+
+export type TestStatus =
+  | "passed"
+  | "failed"
+  | "missing_information"
+  | "known_issue"
+  | "troubleshoot_available"
+  | "uncertain"
+  | "not_run";
+
 export interface AuthenticatedUser {
   id: string;
   email: string;
@@ -160,4 +171,101 @@ export interface HumanScoreResponse {
   human_score: number;
   example_score: number;
   metrics: Record<string, number>;
+}
+
+export interface SubscriptionPayload {
+  mailbox_email: string;
+  imap_host: string;
+  imap_username: string;
+  imap_password?: string;
+  mailbox?: string;
+  use_ssl?: boolean;
+  smtp_host?: string | null;
+  smtp_port?: number | null;
+  subject_keywords: string[];
+  enabled_functions?: string[] | null;
+}
+
+export interface SubscriptionRecord {
+  id: string;
+  mailbox_email: string;
+  imap_host: string;
+  imap_username: string;
+  mailbox: string;
+  use_ssl: boolean;
+  smtp_host?: string | null;
+  smtp_port?: number | null;
+  subject_keywords: string[];
+  enabled_functions: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BugTicketDto {
+  title: string;
+  description: string;
+  steps_to_reproduce: string[];
+  expected_result?: string | null;
+  actual_result?: string | null;
+  severity: string;
+  tags: string[];
+}
+
+export interface WorkflowRun {
+  id: string;
+  subscription_id?: string | null;
+  customer_email?: string | null;
+  status: WorkflowStatus;
+  test_status?: TestStatus | null;
+  actions: string[];
+  follow_up_email?: string | null;
+  resolution_email?: string | null;
+  report: string;
+  mantis_ticket?: BugTicketDto | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MultiAgentResponse {
+  workflow_id: string;
+  status: WorkflowStatus;
+  report: string;
+  actions: string[];
+  follow_up_email?: string | null;
+  resolution_email?: string | null;
+  test_status?: TestStatus | null;
+  test_details?: string | null;
+  missing_information?: string[] | null;
+  known_issue_reference?: string | null;
+  troubleshoot_reference?: string | null;
+  report_path?: string | null;
+  mantis_ticket?: BugTicketDto | null;
+}
+
+export type RatingArtifactType =
+  | "follow_up_email"
+  | "resolution_email"
+  | "qa_report"
+  | "mantis_ticket";
+
+export interface RatingPayload {
+  workflow_id: string;
+  artifact_type: RatingArtifactType;
+  content: string;
+  rating: number;
+  notes?: string;
+}
+
+export interface RatingRecordDto extends RatingPayload {
+  id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DashboardMetrics {
+  workflow_status_counts: Record<string, number>;
+  test_status_counts: Record<string, number>;
+  average_ratings: Record<string, number>;
+  top_rated_examples: Record<string, string[]>;
+  total_ratings: number;
 }

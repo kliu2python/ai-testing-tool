@@ -14,12 +14,18 @@ class MantisTicketBuilder:
 
     default_severity: str = "major"
 
-    def build(self, issue: CustomerIssue, outcome: Optional[TestOutcome]) -> BugTicket:
+    def build(
+        self,
+        issue: CustomerIssue,
+        outcome: Optional[TestOutcome],
+        *,
+        style_examples: Optional[List[str]] = None,
+    ) -> BugTicket:
         """Generate a ``BugTicket`` based on ``issue`` and ``outcome``."""
 
         severity = self._resolve_severity(outcome)
         title = issue.subject or "Mobile issue report"
-        description = self._compose_description(issue, outcome)
+        description = self._compose_description(issue, outcome, style_examples=style_examples)
         tags: List[str] = []
         if issue.platform:
             tags.append(issue.platform.lower())
@@ -47,7 +53,13 @@ class MantisTicketBuilder:
             return "minor"
         return self.default_severity
 
-    def _compose_description(self, issue: CustomerIssue, outcome: Optional[TestOutcome]) -> str:
+    def _compose_description(
+        self,
+        issue: CustomerIssue,
+        outcome: Optional[TestOutcome],
+        *,
+        style_examples: Optional[List[str]] = None,
+    ) -> str:
         details = [issue.describe()]
         if outcome:
             details.append(f"Test outcome: {outcome.status.value} - {outcome.details}")
@@ -55,5 +67,17 @@ class MantisTicketBuilder:
                 details.append(f"Report path: {outcome.report_path}")
         else:
             details.append("Automation was not executed for this ticket.")
+        guidance = self._render_style_examples(style_examples)
+        if guidance:
+            details.append(guidance)
         return "\n\n".join(details)
+
+    @staticmethod
+    def _render_style_examples(examples: Optional[List[str]]) -> str:
+        if not examples:
+            return ""
+        formatted = ["Preferred tone and structure based on highly rated tickets:"]
+        for idx, example in enumerate(examples[:3], start=1):
+            formatted.append(f"Template {idx}:\n{example.strip()}")
+        return "\n\n".join(formatted)
 

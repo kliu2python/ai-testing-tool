@@ -103,6 +103,24 @@ from backend_server.subscriptions import (
     load_subscription,
     update_subscription,
 )
+from backend_server.ratings import (
+    ArtifactType,
+    RatingInput,
+    RatingRecord,
+    create_rating,
+    ensure_rating_tables,
+    list_ratings,
+    rating_averages,
+    top_rated_examples,
+)
+from backend_server.workflow_store import (
+    StoredWorkflow,
+    ensure_workflow_tables,
+    list_workflow_runs,
+    load_workflow_run,
+    record_workflow_result,
+    workflow_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +231,8 @@ def _init_database() -> None:
         )
         ensure_task_tables(conn)
         ensure_subscription_tables(conn)
+        ensure_workflow_tables(conn)
+        ensure_rating_tables(conn)
         conn.commit()
     finally:
         conn.close()
@@ -318,7 +338,18 @@ def _subscription_to_response(subscription: Subscription) -> SubscriptionRespons
     )
 
 
-def _workflow_result_to_response(result: WorkflowResult) -> MultiAgentResponse:
+def _style_examples_from_ratings() -> Dict[str, List[str]]:
+    return {
+        "follow_up_email": top_rated_examples(ArtifactType.FOLLOW_UP_EMAIL),
+        "resolution_email": top_rated_examples(ArtifactType.RESOLUTION_EMAIL),
+        "qa_report": top_rated_examples(ArtifactType.QA_REPORT),
+        "mantis_ticket": top_rated_examples(ArtifactType.MANTIS_TICKET),
+    }
+
+
+def _workflow_result_to_response(
+    result: WorkflowResult, workflow: StoredWorkflow
+) -> MultiAgentResponse:
     outcome = result.outcome
     mantis = (
         BugTicketResponse.from_ticket(result.mantis_ticket)
@@ -326,6 +357,7 @@ def _workflow_result_to_response(result: WorkflowResult) -> MultiAgentResponse:
         else None
     )
     return MultiAgentResponse(
+        workflow_id=workflow.id,
         status=result.status,
         report=result.report,
         actions=result.actions,
@@ -338,6 +370,41 @@ def _workflow_result_to_response(result: WorkflowResult) -> MultiAgentResponse:
         troubleshoot_reference=outcome.troubleshoot_reference if outcome else None,
         report_path=outcome.report_path if outcome else None,
         mantis_ticket=mantis,
+    )
+
+
+def _workflow_to_response(workflow: StoredWorkflow) -> WorkflowRunResponse:
+    mantis = (
+        BugTicketResponse(**workflow.mantis_ticket)
+        if workflow.mantis_ticket
+        else None
+    )
+    return WorkflowRunResponse(
+        id=workflow.id,
+        subscription_id=workflow.subscription_id,
+        customer_email=workflow.customer_email,
+        status=workflow.status,
+        test_status=workflow.test_status,
+        actions=list(workflow.actions),
+        follow_up_email=workflow.follow_up_email,
+        resolution_email=workflow.resolution_email,
+        report=workflow.report,
+        mantis_ticket=mantis,
+        created_at=workflow.created_at,
+        updated_at=workflow.updated_at,
+    )
+
+
+def _rating_to_response(record: RatingRecord) -> RatingResponse:
+    return RatingResponse(
+        id=record.id,
+        workflow_id=record.workflow_id,
+        artifact_type=record.artifact_type,
+        content=record.content,
+        rating=record.rating,
+        notes=record.notes,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 
@@ -696,6 +763,7 @@ class MultiAgentRequest(BaseModel):
 class MultiAgentResponse(BaseModel):
     """Response payload summarising the orchestrated workflow."""
 
+    workflow_id: str
     status: WorkflowStatus
     report: str
     actions: List[str]
@@ -732,6 +800,64 @@ class BugTicketResponse(BaseModel):
             severity=ticket.severity,
             tags=ticket.tags,
         )
+
+
+class WorkflowRunResponse(BaseModel):
+    """Serialized representation of a stored workflow run."""
+
+    id: str
+    subscription_id: Optional[str]
+    customer_email: Optional[str]
+    status: WorkflowStatus
+    test_status: Optional[TestStatus]
+    actions: List[str]
+    follow_up_email: Optional[str]
+    resolution_email: Optional[str]
+    report: str
+    mantis_ticket: Optional[BugTicketResponse]
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class RatingCreateRequest(BaseModel):
+    """Payload for recording human feedback on AI output."""
+
+    workflow_id: str
+    artifact_type: ArtifactType
+    content: str
+    rating: int = Field(..., ge=1, le=5)
+    notes: Optional[str] = None
+
+
+class RatingResponse(BaseModel):
+    """Response payload describing a stored rating."""
+
+    id: str
+    workflow_id: str
+    artifact_type: ArtifactType
+    content: str
+    rating: int
+    notes: Optional[str]
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class RatedArtifactResponse(BaseModel):
+    """High-level summary of the best-rated artifacts per category."""
+
+    artifact_type: ArtifactType
+    content: str
+    rating: float
+
+
+class DashboardMetricsResponse(BaseModel):
+    """Aggregated metrics for the AI workflow dashboard."""
+
+    workflow_status_counts: Dict[str, int]
+    test_status_counts: Dict[str, int]
+    average_ratings: Dict[str, float]
+    top_rated_examples: Dict[str, List[str]]
+    total_ratings: int
 
 
 class SubscriptionBase(BaseModel):
@@ -1213,6 +1339,7 @@ async def run_multi_agent_workflow(
     mobile_agent = MobileTestAgent(proxy_client, automation_runner, llm_mode=request.llm_mode)
 
     reporter_agent = QAReporterAgent(llm)
+    style_examples = _style_examples_from_ratings()
     enabled_functions = set(request.enabled_functions) if request.enabled_functions else None
     orchestrator = MultiAgentOrchestrator(
         email_agent,
@@ -1223,13 +1350,20 @@ async def run_multi_agent_workflow(
             max_emails=request.max_emails,
             enabled_functions=enabled_functions,
         ),
+        style_examples=style_examples,
     )
 
     result = await orchestrator.run(request.customer_email)
     if result is None:
         raise HTTPException(status_code=404, detail="No matching email found")
 
-    return _workflow_result_to_response(result)
+    workflow = record_workflow_result(
+        user_id=current_user.id,
+        result=result,
+        customer_email=request.customer_email,
+    )
+
+    return _workflow_result_to_response(result, workflow)
 
 
 @app.post(
@@ -1359,6 +1493,7 @@ async def run_subscription_workflow(
     mobile_agent = MobileTestAgent(proxy_client, automation_runner, llm_mode=request.llm_mode)
 
     reporter_agent = QAReporterAgent(llm)
+    style_examples = _style_examples_from_ratings()
 
     stored_functions = _from_function_strings(subscription.enabled_functions)
     if request.enabled_functions is not None:
@@ -1377,13 +1512,142 @@ async def run_subscription_workflow(
             max_emails=request.max_emails,
             enabled_functions=enabled_functions,
         ),
+        style_examples=style_examples,
     )
 
     result = await orchestrator.run(None)
     if result is None:
         raise HTTPException(status_code=404, detail="No matching email found")
 
-    return _workflow_result_to_response(result)
+    workflow = record_workflow_result(
+        user_id=current_user.id,
+        result=result,
+        subscription_id=subscription_id,
+        customer_email=result.issue.customer_email,
+    )
+
+    return _workflow_result_to_response(result, workflow)
+
+
+@app.get(
+    "/workflows",
+    response_model=List[WorkflowRunResponse],
+    summary="List orchestrated workflow runs",
+)
+def list_workflow_history(
+    owner_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+) -> List[WorkflowRunResponse]:
+    if owner_id is not None and not current_user.is_admin and owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorised to view workflow runs for this user",
+        )
+
+    owner_filter = owner_id if owner_id is not None else (None if current_user.is_admin else current_user.id)
+
+    try:
+        records = list_workflow_runs(owner_id=owner_filter)
+    except sqlite3.Error as exc:  # pragma: no cover - rare failure
+        raise HTTPException(status_code=503, detail=f"Failed to load workflows: {exc}") from exc
+
+    return [_workflow_to_response(record) for record in records]
+
+
+@app.post(
+    "/ratings",
+    response_model=RatingResponse,
+    summary="Record human feedback for an AI-generated artifact",
+)
+def create_rating_entry(
+    payload: RatingCreateRequest,
+    current_user: User = Depends(get_current_user),
+) -> RatingResponse:
+    workflow = load_workflow_run(payload.workflow_id)
+    if workflow is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+    if not current_user.is_admin and workflow.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorised to rate this workflow",
+        )
+
+    try:
+        record = create_rating(
+            current_user.id,
+            RatingInput(
+                workflow_id=payload.workflow_id,
+                artifact_type=payload.artifact_type,
+                content=payload.content,
+                rating=payload.rating,
+                notes=payload.notes,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _rating_to_response(record)
+
+
+@app.get(
+    "/ratings",
+    response_model=List[RatingResponse],
+    summary="List stored ratings",
+)
+def list_rating_entries(
+    artifact_type: Optional[ArtifactType] = None,
+    owner_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+) -> List[RatingResponse]:
+    if owner_id is not None and not current_user.is_admin and owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorised to view ratings for this user",
+        )
+
+    owner_filter = owner_id if owner_id is not None else (None if current_user.is_admin else current_user.id)
+
+    try:
+        records = list_ratings(owner_id=owner_filter, artifact_type=artifact_type)
+    except sqlite3.Error as exc:  # pragma: no cover - rare failure
+        raise HTTPException(status_code=503, detail=f"Failed to load ratings: {exc}") from exc
+
+    return [_rating_to_response(record) for record in records]
+
+
+@app.get(
+    "/dashboard/metrics",
+    response_model=DashboardMetricsResponse,
+    summary="Retrieve aggregated workflow analytics",
+)
+def get_dashboard_metrics(
+    owner_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+) -> DashboardMetricsResponse:
+    if owner_id is not None and not current_user.is_admin and owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorised to view dashboard metrics for this user",
+        )
+
+    owner_filter = owner_id if owner_id is not None else (None if current_user.is_admin else current_user.id)
+
+    metrics = workflow_metrics(owner_filter)
+    averages = rating_averages(owner_filter)
+    top_examples = {
+        ArtifactType.FOLLOW_UP_EMAIL.value: top_rated_examples(ArtifactType.FOLLOW_UP_EMAIL),
+        ArtifactType.RESOLUTION_EMAIL.value: top_rated_examples(ArtifactType.RESOLUTION_EMAIL),
+        ArtifactType.QA_REPORT.value: top_rated_examples(ArtifactType.QA_REPORT),
+        ArtifactType.MANTIS_TICKET.value: top_rated_examples(ArtifactType.MANTIS_TICKET),
+    }
+    total_ratings = len(list_ratings(owner_id=owner_filter, limit=10_000))
+
+    return DashboardMetricsResponse(
+        workflow_status_counts=metrics.get("workflow_status", {}),
+        test_status_counts=metrics.get("test_status", {}),
+        average_ratings=averages,
+        top_rated_examples=top_examples,
+        total_ratings=total_ratings,
+    )
 
 
 @app.post(

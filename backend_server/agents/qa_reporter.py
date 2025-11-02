@@ -9,6 +9,8 @@ try:  # pragma: no cover - import guard for environments without LangChain
 except ImportError:  # pragma: no cover - fallback
     from .langchain_fallback import ChatPromptTemplate, Runnable, StrOutputParser
 
+from typing import List, Optional
+
 from .data_models import CustomerIssue, TestOutcome, TestStatus
 
 
@@ -26,6 +28,7 @@ class QAReporterAgent:
                     "human",
                     "Issue details:\n{issue_description}\n"
                     "Test result: {test_result}\n"
+                    "Style guidance:\n{style_examples}\n"
                     "Please provide a report containing a summary, execution environment, reproduction steps, conclusion, and next recommendations.",
                 ),
             ]
@@ -40,6 +43,7 @@ class QAReporterAgent:
                     "human",
                     "Issue details:\n{issue_description}\n"
                     "Missing information:\n{missing_info}\n"
+                    "Style guidance:\n{style_examples}\n"
                     "Compose a report that emphasises what the customer still needs to provide and the planned next steps.",
                 ),
             ]
@@ -47,18 +51,38 @@ class QAReporterAgent:
         self._report_chain = prompt | llm | StrOutputParser()
         self._pending_chain = pending_prompt | llm | StrOutputParser()
 
-    def generate_report(self, issue: CustomerIssue, outcome: TestOutcome) -> str:
+    def generate_report(
+        self,
+        issue: CustomerIssue,
+        outcome: TestOutcome,
+        *,
+        style_examples: Optional[List[str]] = None,
+    ) -> str:
         description = issue.describe()
         status_text = self._render_status(outcome)
         return self._report_chain.invoke(
-            {"issue_description": description, "test_result": status_text}
+            {
+                "issue_description": description,
+                "test_result": status_text,
+                "style_examples": self._render_style_examples(style_examples),
+            }
         )
 
-    def generate_pending_report(self, issue: CustomerIssue, missing_info: list[str]) -> str:
+    def generate_pending_report(
+        self,
+        issue: CustomerIssue,
+        missing_info: list[str],
+        *,
+        style_examples: Optional[List[str]] = None,
+    ) -> str:
         description = issue.describe()
         missing = "\n".join(f"- {item}" for item in missing_info)
         return self._pending_chain.invoke(
-            {"issue_description": description, "missing_info": missing}
+            {
+                "issue_description": description,
+                "missing_info": missing,
+                "style_examples": self._render_style_examples(style_examples),
+            }
         )
 
     def _render_status(self, outcome: TestOutcome) -> str:
@@ -74,4 +98,13 @@ class QAReporterAgent:
             TestStatus.NOT_RUN: "Automation was skipped for this request.",
         }
         return mapping[outcome.status]
+
+    @staticmethod
+    def _render_style_examples(examples: Optional[List[str]]) -> str:
+        if not examples:
+            return "No specific style preferences provided."
+        formatted = []
+        for idx, example in enumerate(examples[:5], start=1):
+            formatted.append(f"Example {idx}:\n{example.strip()}")
+        return "\n\n".join(formatted)
 

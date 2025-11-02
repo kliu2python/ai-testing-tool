@@ -102,6 +102,7 @@ class EmailAgent:
                     "Customer email: {customer_email}\n"
                     "Issue summary:\n{issue_summary}\n"
                     "Missing details: {missing_items}\n"
+                    "Style guidance:\n{style_examples}\n"
                     "Please write the email in English.",
                 ),
             ]
@@ -121,6 +122,7 @@ class EmailAgent:
                     "Customer email: {customer_email}\n"
                     "Issue summary:\n{issue_summary}\n"
                     "Test conclusion: {test_summary}\n"
+                    "Style guidance:\n{style_examples}\n"
                     "Please write the email in English.",
                 ),
             ]
@@ -152,26 +154,49 @@ class EmailAgent:
             metadata={"message_id": message.message_id or ""},
         )
 
-    def compose_follow_up(self, issue: CustomerIssue, missing_items: List[str]) -> str:
+    def compose_follow_up(
+        self,
+        issue: CustomerIssue,
+        missing_items: List[str],
+        *,
+        style_examples: Optional[List[str]] = None,
+    ) -> str:
         missing_text = "\n".join(f"- {item}" for item in missing_items)
         return self._followup_chain.invoke(
             {
                 "customer_email": issue.customer_email,
                 "issue_summary": issue.describe(),
                 "missing_items": missing_text,
+                "style_examples": self._render_style_examples(style_examples),
             }
         )
 
-    def compose_resolution(self, issue: CustomerIssue, summary: str) -> str:
+    def compose_resolution(
+        self,
+        issue: CustomerIssue,
+        summary: str,
+        *,
+        style_examples: Optional[List[str]] = None,
+    ) -> str:
         return self._resolution_chain.invoke(
             {
                 "customer_email": issue.customer_email,
                 "issue_summary": issue.describe(),
                 "test_summary": summary,
+                "style_examples": self._render_style_examples(style_examples),
             }
         )
 
     def send_email(self, to: str, subject: str, body: str) -> None:
         logger.info("Sending email to %s with subject '%s'", to, subject)
         self.client.send(to, subject, body)
+
+    @staticmethod
+    def _render_style_examples(examples: Optional[List[str]]) -> str:
+        if not examples:
+            return "No specific style preferences provided."
+        formatted = []
+        for idx, example in enumerate(examples[:5], start=1):
+            formatted.append(f"Example {idx}:\n{example.strip()}")
+        return "\n\n".join(formatted)
 

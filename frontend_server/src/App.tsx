@@ -34,6 +34,8 @@ import RunTaskForm from "./components/RunTaskForm";
 import TaskManagementPanel from "./components/TaskManagementPanel";
 import CodeLibraryPanel from "./components/CodeLibraryPanel";
 import AdminPortal from "./components/AdminPortal";
+import SubscriptionPortal from "./components/SubscriptionPortal";
+import DashboardPanel from "./components/DashboardPanel";
 import theme from "./theme";
 import type {
   AuthenticatedUser,
@@ -72,7 +74,9 @@ function tabProps(index: number) {
 }
 
 const AUTH_STORAGE_KEY = "backend-server-auth";
-const ADMIN_TAB_INDEX = 4;
+const SUBSCRIPTIONS_TAB_INDEX = 4;
+const DASHBOARD_TAB_INDEX = 5;
+const ADMIN_TAB_INDEX = 6;
 
 export default function App() {
   const [baseUrl, setBaseUrl] = useState<string>(API_BASE_DEFAULT);
@@ -486,6 +490,16 @@ export default function App() {
               <Tab label="Run Tasks" disabled={!token} {...tabProps(1)} />
               <Tab label="Results" disabled={!token} {...tabProps(2)} />
               <Tab label="Code Library" disabled={!token} {...tabProps(3)} />
+              <Tab
+                label="Subscriptions"
+                disabled={!token}
+                {...tabProps(SUBSCRIPTIONS_TAB_INDEX)}
+              />
+              <Tab
+                label="Dashboard"
+                disabled={!token}
+                {...tabProps(DASHBOARD_TAB_INDEX)}
+              />
               {isAdmin ? (
                 <Tab label="Admin" disabled={!token} {...tabProps(ADMIN_TAB_INDEX)} />
               ) : null}
@@ -515,6 +529,24 @@ export default function App() {
                 token={token}
                 onNotify={showNotification}
                 active={activeTab === 3}
+              />
+            </TabPanel>
+            <TabPanel value={activeTab} index={SUBSCRIPTIONS_TAB_INDEX}>
+              <SubscriptionPortal
+                baseUrl={baseUrl}
+                token={token}
+                user={user}
+                onNotify={showNotification}
+                active={activeTab === SUBSCRIPTIONS_TAB_INDEX}
+              />
+            </TabPanel>
+            <TabPanel value={activeTab} index={DASHBOARD_TAB_INDEX}>
+              <DashboardPanel
+                baseUrl={baseUrl}
+                token={token}
+                user={user}
+                onNotify={showNotification}
+                active={activeTab === DASHBOARD_TAB_INDEX}
               />
             </TabPanel>
             {isAdmin ? (
