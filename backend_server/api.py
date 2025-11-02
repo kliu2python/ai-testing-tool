@@ -27,6 +27,31 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field, ValidationError, model_validator
 from redis.asyncio import Redis
 
+try:  # pragma: no cover - optional dependency guard
+    from langchain_openai import ChatOpenAI
+except ImportError:  # pragma: no cover - fallback for offline environments
+    ChatOpenAI = None  # type: ignore[assignment]
+
+from backend_server.agents import (
+    BugTicket,
+    DeviceDescriptor,
+    EmailAgent,
+    EmailMessage,
+    ImapEmailClient,
+    InMemoryEmailClient,
+    MOBILE_AGENT_SYSTEM_PROMPT,
+    MobileAutomationRunner,
+    MobileProxyClient,
+    MobileTestAgent,
+    MultiAgentOrchestrator,
+    QAReporterAgent,
+    TestStatus,
+    WorkflowConfig,
+    WorkflowResult,
+    WorkflowFunction,
+    WorkflowStatus,
+)
+
 from backend_server.example_bootstrap import (
     hash_task,
     load_example_config,
@@ -65,6 +90,37 @@ from backend_server.task_store import (
     update_example_metrics,
     update_task_request,
 )
+from backend_server.subscriptions import (
+    Subscription,
+    SubscriptionCredentials,
+    SubscriptionError,
+    SubscriptionInput,
+    create_subscription,
+    delete_subscription,
+    ensure_subscription_tables,
+    list_subscriptions,
+    load_credentials,
+    load_subscription,
+    update_subscription,
+)
+from backend_server.ratings import (
+    ArtifactType,
+    RatingInput,
+    RatingRecord,
+    create_rating,
+    ensure_rating_tables,
+    list_ratings,
+    rating_averages,
+    top_rated_examples,
+)
+from backend_server.workflow_store import (
+    StoredWorkflow,
+    ensure_workflow_tables,
+    list_workflow_runs,
+    load_workflow_run,
+    record_workflow_result,
+    workflow_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +129,22 @@ def _decode_stream(payload: bytes) -> str:
     """Decode ``payload`` into UTF-8 text with replacement handling."""
 
     return payload.decode("utf-8", errors="replace")
+
+
+def _to_function_strings(functions: Optional[List[WorkflowFunction]]) -> List[str]:
+    if not functions:
+        return []
+    return [fn.value for fn in functions]
+
+
+def _from_function_strings(values: List[str]) -> List[WorkflowFunction]:
+    functions: List[WorkflowFunction] = []
+    for value in values:
+        try:
+            functions.append(WorkflowFunction(value))
+        except ValueError:
+            logger.warning("Unknown workflow function stored in subscription: %s", value)
+    return functions
 
 
 # -----------------------------
@@ -158,6 +230,9 @@ def _init_database() -> None:
             """
         )
         ensure_task_tables(conn)
+        ensure_subscription_tables(conn)
+        ensure_workflow_tables(conn)
+        ensure_rating_tables(conn)
         conn.commit()
     finally:
         conn.close()
@@ -198,6 +273,151 @@ def _create_user(email: str, password: str) -> User:
         conn.close()
 
     return User(id=user_id, email=email.lower(), role="user")
+
+
+def _build_langchain_llm(model_name: Optional[str], temperature: float) -> ChatOpenAI:
+    """Instantiate a ``ChatOpenAI`` client using repository defaults."""
+
+    if ChatOpenAI is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="langchain-openai is not installed in this environment",
+        )
+
+    resolved_model = (
+        model_name
+        or os.getenv("LANGCHAIN_DEFAULT_MODEL")
+        or os.getenv("OPENAI_MODEL")
+        or "gpt-4o-mini"
+    )
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="OPENAI_API_KEY environment variable must be configured",
+        )
+
+    base_url = os.getenv("OPENAI_BASE_URL")
+    client_kwargs = {"model": resolved_model, "temperature": temperature, "api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    return ChatOpenAI(**client_kwargs)
+
+
+def _subscription_input_from_request(
+    request: SubscriptionBase, password: Optional[str]
+) -> SubscriptionInput:
+    return SubscriptionInput(
+        mailbox_email=request.mailbox_email,
+        imap_host=request.imap_host,
+        imap_username=request.imap_username,
+        imap_password=password,
+        mailbox=request.mailbox,
+        use_ssl=request.use_ssl,
+        smtp_host=request.smtp_host,
+        smtp_port=request.smtp_port,
+        subject_keywords=request.subject_keywords,
+        enabled_functions=_to_function_strings(request.enabled_functions),
+    )
+
+
+def _subscription_to_response(subscription: Subscription) -> SubscriptionResponse:
+    return SubscriptionResponse(
+        id=subscription.id,
+        mailbox_email=subscription.mailbox_email,
+        imap_host=subscription.imap_host,
+        imap_username=subscription.imap_username,
+        mailbox=subscription.mailbox,
+        use_ssl=subscription.use_ssl,
+        smtp_host=subscription.smtp_host,
+        smtp_port=subscription.smtp_port,
+        subject_keywords=subscription.subject_keywords,
+        enabled_functions=_from_function_strings(subscription.enabled_functions),
+        created_at=subscription.created_at,
+        updated_at=subscription.updated_at,
+    )
+
+
+def _style_examples_from_ratings() -> Dict[str, List[str]]:
+    return {
+        "follow_up_email": top_rated_examples(ArtifactType.FOLLOW_UP_EMAIL),
+        "resolution_email": top_rated_examples(ArtifactType.RESOLUTION_EMAIL),
+        "qa_report": top_rated_examples(ArtifactType.QA_REPORT),
+        "mantis_ticket": top_rated_examples(ArtifactType.MANTIS_TICKET),
+    }
+
+
+def _workflow_result_to_response(
+    result: WorkflowResult, workflow: StoredWorkflow
+) -> MultiAgentResponse:
+    outcome = result.outcome
+    mantis = (
+        BugTicketResponse.from_ticket(result.mantis_ticket)
+        if result.mantis_ticket
+        else None
+    )
+    return MultiAgentResponse(
+        workflow_id=workflow.id,
+        status=result.status,
+        report=result.report,
+        actions=result.actions,
+        follow_up_email=result.follow_up_email,
+        resolution_email=result.resolution_email,
+        test_status=outcome.status if outcome else None,
+        test_details=outcome.details if outcome else None,
+        missing_information=outcome.missing_information if outcome else None,
+        known_issue_reference=outcome.known_issue_reference if outcome else None,
+        troubleshoot_reference=outcome.troubleshoot_reference if outcome else None,
+        report_path=outcome.report_path if outcome else None,
+        mantis_ticket=mantis,
+    )
+
+
+def _workflow_to_response(workflow: StoredWorkflow) -> WorkflowRunResponse:
+    mantis = (
+        BugTicketResponse(**workflow.mantis_ticket)
+        if workflow.mantis_ticket
+        else None
+    )
+    return WorkflowRunResponse(
+        id=workflow.id,
+        subscription_id=workflow.subscription_id,
+        customer_email=workflow.customer_email,
+        status=workflow.status,
+        test_status=workflow.test_status,
+        actions=list(workflow.actions),
+        follow_up_email=workflow.follow_up_email,
+        resolution_email=workflow.resolution_email,
+        report=workflow.report,
+        mantis_ticket=mantis,
+        created_at=workflow.created_at,
+        updated_at=workflow.updated_at,
+    )
+
+
+def _rating_to_response(record: RatingRecord) -> RatingResponse:
+    return RatingResponse(
+        id=record.id,
+        workflow_id=record.workflow_id,
+        artifact_type=record.artifact_type,
+        content=record.content,
+        rating=record.rating,
+        notes=record.notes,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _payload_to_email(payload: "RawEmailPayload") -> EmailMessage:
+    """Convert API payload into the internal email representation."""
+
+    return EmailMessage(
+        subject=payload.subject,
+        sender=payload.sender,
+        body=payload.body,
+        received_at=payload.received_at,
+        message_id=payload.message_id,
+    )
 
 
 def _get_user_by_email(email: str) -> Optional[sqlite3.Row]:
@@ -475,6 +695,229 @@ class RunResponse(BaseModel):
 
     task_id: str
     task_ids: List[str]
+
+
+class RawEmailPayload(BaseModel):
+    """Serialized representation of an email message for the orchestrator."""
+
+    subject: str
+    sender: EmailStr
+    body: str
+    received_at: dt.datetime
+    message_id: Optional[str] = None
+
+
+class ImapConfig(BaseModel):
+    """IMAP/SMTP credentials used to fetch and send emails."""
+
+    host: str
+    username: str
+    password: str
+    mailbox: str = "INBOX"
+    use_ssl: bool = True
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+
+
+class DeviceConfig(BaseModel):
+    """Device metadata sourced from the mobile proxy."""
+
+    name: str
+    platform: str
+    server: str
+    os_version: Optional[str] = None
+    model: Optional[str] = None
+
+
+class MultiAgentRequest(BaseModel):
+    """Request payload for the LangChain multi-agent workflow."""
+
+    customer_email: Optional[EmailStr] = None
+    devices: List[DeviceConfig]
+    emails: Optional[List[RawEmailPayload]] = None
+    imap: Optional[ImapConfig] = None
+    subject_keywords: Optional[List[str]] = None
+    max_emails: int = Field(5, ge=1, le=50)
+    reports_folder: Optional[str] = None
+    prompt: Optional[str] = None
+    llm_model: Optional[str] = None
+    temperature: float = Field(0.0, ge=0.0, le=1.0)
+    llm_mode: Optional[str] = Field(
+        default=None,
+        description="Override the LLM mode for the automation runner (text/vision).",
+    )
+    enabled_functions: Optional[List[WorkflowFunction]] = Field(
+        default=None,
+        description="Subset of workflow capabilities to execute (defaults to all).",
+    )
+
+    @model_validator(mode="after")
+    def _ensure_email_source(self) -> "MultiAgentRequest":
+        if not self.emails and not self.imap:
+            raise ValueError("Provide either inline 'emails' data or IMAP credentials")
+        if not self.customer_email and not self.subject_keywords:
+            raise ValueError("Specify customer_email or subject_keywords to filter the mailbox")
+        return self
+
+
+class MultiAgentResponse(BaseModel):
+    """Response payload summarising the orchestrated workflow."""
+
+    workflow_id: str
+    status: WorkflowStatus
+    report: str
+    actions: List[str]
+    follow_up_email: Optional[str] = None
+    resolution_email: Optional[str] = None
+    test_status: Optional[TestStatus] = None
+    test_details: Optional[str] = None
+    missing_information: Optional[List[str]] = None
+    known_issue_reference: Optional[str] = None
+    troubleshoot_reference: Optional[str] = None
+    report_path: Optional[str] = None
+    mantis_ticket: Optional["BugTicketResponse"] = None
+
+
+class BugTicketResponse(BaseModel):
+    """Serialized representation of a generated Mantis ticket."""
+
+    title: str
+    description: str
+    steps_to_reproduce: List[str]
+    expected_result: Optional[str]
+    actual_result: Optional[str]
+    severity: str
+    tags: List[str]
+
+    @classmethod
+    def from_ticket(cls, ticket: BugTicket) -> "BugTicketResponse":
+        return cls(
+            title=ticket.title,
+            description=ticket.description,
+            steps_to_reproduce=ticket.steps_to_reproduce,
+            expected_result=ticket.expected_result,
+            actual_result=ticket.actual_result,
+            severity=ticket.severity,
+            tags=ticket.tags,
+        )
+
+
+class WorkflowRunResponse(BaseModel):
+    """Serialized representation of a stored workflow run."""
+
+    id: str
+    subscription_id: Optional[str]
+    customer_email: Optional[str]
+    status: WorkflowStatus
+    test_status: Optional[TestStatus]
+    actions: List[str]
+    follow_up_email: Optional[str]
+    resolution_email: Optional[str]
+    report: str
+    mantis_ticket: Optional[BugTicketResponse]
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class RatingCreateRequest(BaseModel):
+    """Payload for recording human feedback on AI output."""
+
+    workflow_id: str
+    artifact_type: ArtifactType
+    content: str
+    rating: int = Field(..., ge=1, le=5)
+    notes: Optional[str] = None
+
+
+class RatingResponse(BaseModel):
+    """Response payload describing a stored rating."""
+
+    id: str
+    workflow_id: str
+    artifact_type: ArtifactType
+    content: str
+    rating: int
+    notes: Optional[str]
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class RatedArtifactResponse(BaseModel):
+    """High-level summary of the best-rated artifacts per category."""
+
+    artifact_type: ArtifactType
+    content: str
+    rating: float
+
+
+class DashboardMetricsResponse(BaseModel):
+    """Aggregated metrics for the AI workflow dashboard."""
+
+    workflow_status_counts: Dict[str, int]
+    test_status_counts: Dict[str, int]
+    average_ratings: Dict[str, float]
+    top_rated_examples: Dict[str, List[str]]
+    total_ratings: int
+
+
+class SubscriptionBase(BaseModel):
+    """Common fields shared by subscription create/update requests."""
+
+    mailbox_email: EmailStr
+    imap_host: str
+    imap_username: str
+    mailbox: str = "INBOX"
+    use_ssl: bool = True
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    subject_keywords: List[str] = Field(default_factory=list)
+    enabled_functions: Optional[List[WorkflowFunction]] = Field(
+        default=None,
+        description="Subset of workflow capabilities available for this subscription.",
+    )
+
+
+class SubscriptionCreateRequest(SubscriptionBase):
+    """Payload for creating a new subscription."""
+
+    imap_password: str = Field(..., min_length=1)
+
+
+class SubscriptionUpdateRequest(SubscriptionBase):
+    """Payload for updating an existing subscription."""
+
+    imap_password: Optional[str] = Field(default=None, min_length=1)
+
+
+class SubscriptionResponse(BaseModel):
+    """API response describing a stored subscription."""
+
+    id: str
+    mailbox_email: EmailStr
+    imap_host: str
+    imap_username: str
+    mailbox: str
+    use_ssl: bool
+    smtp_host: Optional[str]
+    smtp_port: Optional[int]
+    subject_keywords: List[str]
+    enabled_functions: List[WorkflowFunction]
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class SubscriptionRunRequest(BaseModel):
+    """Request payload when executing a subscription on-demand."""
+
+    devices: List[DeviceConfig]
+    subject_keywords: Optional[List[str]] = None
+    max_emails: int = Field(5, ge=1, le=50)
+    reports_folder: Optional[str] = None
+    prompt: Optional[str] = None
+    llm_model: Optional[str] = None
+    temperature: float = Field(0.0, ge=0.0, le=1.0)
+    llm_mode: Optional[str] = Field(default=None)
+    enabled_functions: Optional[List[WorkflowFunction]] = None
 
 
 class PytestCodegenRequest(BaseModel):
@@ -843,6 +1286,368 @@ async def run_automation(
         task_ids.append(task_id)
 
     return RunResponse(task_id=task_ids[0], task_ids=task_ids)
+
+
+@app.post(
+    "/multi-agent/run",
+    response_model=MultiAgentResponse,
+    summary="Trigger the LangChain multi-agent workflow",
+)
+async def run_multi_agent_workflow(
+    request: MultiAgentRequest,
+    current_user: User = Depends(get_current_user),
+) -> MultiAgentResponse:
+    """Execute the end-to-end workflow across email, mobile testing, and reporting."""
+
+    logger.info(
+        "User %s is launching multi-agent workflow for %s", current_user.email, request.customer_email
+    )
+
+    if request.emails:
+        email_client = InMemoryEmailClient(_payload_to_email(msg) for msg in request.emails)
+    elif request.imap:
+        email_client = ImapEmailClient(
+            imap_host=request.imap.host,
+            username=request.imap.username,
+            password=request.imap.password,
+            mailbox=request.imap.mailbox,
+            use_ssl=request.imap.use_ssl,
+            smtp_host=request.imap.smtp_host,
+            smtp_port=request.imap.smtp_port,
+        )
+    else:  # pragma: no cover - guarded by validator
+        raise HTTPException(status_code=400, detail="Email source is required")
+
+    llm = _build_langchain_llm(request.llm_model, request.temperature)
+    email_agent = EmailAgent(email_client, llm)
+
+    devices = [
+        DeviceDescriptor(
+            name=device.name,
+            platform=device.platform,
+            server=device.server,
+            os_version=device.os_version,
+            model=device.model,
+        )
+        for device in request.devices
+    ]
+    proxy_client = MobileProxyClient(devices)
+
+    reports_folder = request.reports_folder or str(_REPORTS_ROOT)
+    prompt = request.prompt or MOBILE_AGENT_SYSTEM_PROMPT
+    automation_runner = MobileAutomationRunner(prompt, reports_folder)
+    mobile_agent = MobileTestAgent(proxy_client, automation_runner, llm_mode=request.llm_mode)
+
+    reporter_agent = QAReporterAgent(llm)
+    style_examples = _style_examples_from_ratings()
+    enabled_functions = set(request.enabled_functions) if request.enabled_functions else None
+    orchestrator = MultiAgentOrchestrator(
+        email_agent,
+        mobile_agent,
+        reporter_agent,
+        WorkflowConfig(
+            issue_subject_keywords=request.subject_keywords,
+            max_emails=request.max_emails,
+            enabled_functions=enabled_functions,
+        ),
+        style_examples=style_examples,
+    )
+
+    result = await orchestrator.run(request.customer_email)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No matching email found")
+
+    workflow = record_workflow_result(
+        user_id=current_user.id,
+        result=result,
+        customer_email=request.customer_email,
+    )
+
+    return _workflow_result_to_response(result, workflow)
+
+
+@app.post(
+    "/subscriptions",
+    response_model=SubscriptionResponse,
+    summary="Register a new subscription",
+)
+def create_subscription_entry(
+    payload: SubscriptionCreateRequest,
+    current_user: User = Depends(get_current_user),
+) -> SubscriptionResponse:
+    try:
+        subscription = create_subscription(
+            current_user.id,
+            _subscription_input_from_request(payload, payload.imap_password),
+        )
+    except SubscriptionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _subscription_to_response(subscription)
+
+
+@app.get(
+    "/subscriptions",
+    response_model=List[SubscriptionResponse],
+    summary="List subscriptions for the authenticated user",
+)
+def list_subscriptions_for_user(
+    current_user: User = Depends(get_current_user),
+) -> List[SubscriptionResponse]:
+    try:
+        subscriptions = list_subscriptions(current_user.id)
+    except SubscriptionError as exc:  # pragma: no cover - unexpected failure
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return [_subscription_to_response(item) for item in subscriptions]
+
+
+@app.put(
+    "/subscriptions/{subscription_id}",
+    response_model=SubscriptionResponse,
+    summary="Update a subscription",
+)
+def update_subscription_entry(
+    subscription_id: str,
+    payload: SubscriptionUpdateRequest,
+    current_user: User = Depends(get_current_user),
+) -> SubscriptionResponse:
+    try:
+        subscription = update_subscription(
+            current_user.id,
+            subscription_id,
+            _subscription_input_from_request(payload, payload.imap_password),
+        )
+    except SubscriptionError as exc:
+        status_code = status.HTTP_404_NOT_FOUND if "not found" in str(exc).lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return _subscription_to_response(subscription)
+
+
+@app.delete(
+    "/subscriptions/{subscription_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a subscription",
+)
+def delete_subscription_entry(
+    subscription_id: str,
+    current_user: User = Depends(get_current_user),
+) -> None:
+    try:
+        delete_subscription(current_user.id, subscription_id)
+    except SubscriptionError as exc:
+        status_code = status.HTTP_404_NOT_FOUND if "not found" in str(exc).lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@app.post(
+    "/subscriptions/{subscription_id}/run",
+    response_model=MultiAgentResponse,
+    summary="Execute the workflow for a stored subscription",
+)
+async def run_subscription_workflow(
+    subscription_id: str,
+    request: SubscriptionRunRequest,
+    current_user: User = Depends(get_current_user),
+) -> MultiAgentResponse:
+    try:
+        credentials = load_credentials(current_user.id, subscription_id)
+    except SubscriptionError as exc:
+        status_code = status.HTTP_404_NOT_FOUND if "not found" in str(exc).lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+    subscription = credentials.subscription
+    subject_keywords = request.subject_keywords or subscription.subject_keywords
+    if not subject_keywords:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Subject keywords must be provided either in the subscription or the request",
+        )
+
+    email_client = ImapEmailClient(
+        imap_host=subscription.imap_host,
+        username=subscription.imap_username,
+        password=credentials.imap_password,
+        mailbox=subscription.mailbox,
+        use_ssl=subscription.use_ssl,
+        smtp_host=subscription.smtp_host,
+        smtp_port=subscription.smtp_port,
+    )
+
+    llm = _build_langchain_llm(request.llm_model, request.temperature)
+    email_agent = EmailAgent(email_client, llm)
+
+    devices = [
+        DeviceDescriptor(
+            name=device.name,
+            platform=device.platform,
+            server=device.server,
+            os_version=device.os_version,
+            model=device.model,
+        )
+        for device in request.devices
+    ]
+    proxy_client = MobileProxyClient(devices)
+
+    reports_folder = request.reports_folder or str(_REPORTS_ROOT)
+    prompt = request.prompt or MOBILE_AGENT_SYSTEM_PROMPT
+    automation_runner = MobileAutomationRunner(prompt, reports_folder)
+    mobile_agent = MobileTestAgent(proxy_client, automation_runner, llm_mode=request.llm_mode)
+
+    reporter_agent = QAReporterAgent(llm)
+    style_examples = _style_examples_from_ratings()
+
+    stored_functions = _from_function_strings(subscription.enabled_functions)
+    if request.enabled_functions is not None:
+        enabled_functions: Optional[Set[WorkflowFunction]] = set(request.enabled_functions)
+    elif stored_functions:
+        enabled_functions = set(stored_functions)
+    else:
+        enabled_functions = None
+
+    orchestrator = MultiAgentOrchestrator(
+        email_agent,
+        mobile_agent,
+        reporter_agent,
+        WorkflowConfig(
+            issue_subject_keywords=subject_keywords,
+            max_emails=request.max_emails,
+            enabled_functions=enabled_functions,
+        ),
+        style_examples=style_examples,
+    )
+
+    result = await orchestrator.run(None)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No matching email found")
+
+    workflow = record_workflow_result(
+        user_id=current_user.id,
+        result=result,
+        subscription_id=subscription_id,
+        customer_email=result.issue.customer_email,
+    )
+
+    return _workflow_result_to_response(result, workflow)
+
+
+@app.get(
+    "/workflows",
+    response_model=List[WorkflowRunResponse],
+    summary="List orchestrated workflow runs",
+)
+def list_workflow_history(
+    owner_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+) -> List[WorkflowRunResponse]:
+    if owner_id is not None and not current_user.is_admin and owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorised to view workflow runs for this user",
+        )
+
+    owner_filter = owner_id if owner_id is not None else (None if current_user.is_admin else current_user.id)
+
+    try:
+        records = list_workflow_runs(owner_id=owner_filter)
+    except sqlite3.Error as exc:  # pragma: no cover - rare failure
+        raise HTTPException(status_code=503, detail=f"Failed to load workflows: {exc}") from exc
+
+    return [_workflow_to_response(record) for record in records]
+
+
+@app.post(
+    "/ratings",
+    response_model=RatingResponse,
+    summary="Record human feedback for an AI-generated artifact",
+)
+def create_rating_entry(
+    payload: RatingCreateRequest,
+    current_user: User = Depends(get_current_user),
+) -> RatingResponse:
+    workflow = load_workflow_run(payload.workflow_id)
+    if workflow is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+    if not current_user.is_admin and workflow.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorised to rate this workflow",
+        )
+
+    try:
+        record = create_rating(
+            current_user.id,
+            RatingInput(
+                workflow_id=payload.workflow_id,
+                artifact_type=payload.artifact_type,
+                content=payload.content,
+                rating=payload.rating,
+                notes=payload.notes,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _rating_to_response(record)
+
+
+@app.get(
+    "/ratings",
+    response_model=List[RatingResponse],
+    summary="List stored ratings",
+)
+def list_rating_entries(
+    artifact_type: Optional[ArtifactType] = None,
+    owner_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+) -> List[RatingResponse]:
+    if owner_id is not None and not current_user.is_admin and owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorised to view ratings for this user",
+        )
+
+    owner_filter = owner_id if owner_id is not None else (None if current_user.is_admin else current_user.id)
+
+    try:
+        records = list_ratings(owner_id=owner_filter, artifact_type=artifact_type)
+    except sqlite3.Error as exc:  # pragma: no cover - rare failure
+        raise HTTPException(status_code=503, detail=f"Failed to load ratings: {exc}") from exc
+
+    return [_rating_to_response(record) for record in records]
+
+
+@app.get(
+    "/dashboard/metrics",
+    response_model=DashboardMetricsResponse,
+    summary="Retrieve aggregated workflow analytics",
+)
+def get_dashboard_metrics(
+    owner_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+) -> DashboardMetricsResponse:
+    if owner_id is not None and not current_user.is_admin and owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorised to view dashboard metrics for this user",
+        )
+
+    owner_filter = owner_id if owner_id is not None else (None if current_user.is_admin else current_user.id)
+
+    metrics = workflow_metrics(owner_filter)
+    averages = rating_averages(owner_filter)
+    top_examples = {
+        ArtifactType.FOLLOW_UP_EMAIL.value: top_rated_examples(ArtifactType.FOLLOW_UP_EMAIL),
+        ArtifactType.RESOLUTION_EMAIL.value: top_rated_examples(ArtifactType.RESOLUTION_EMAIL),
+        ArtifactType.QA_REPORT.value: top_rated_examples(ArtifactType.QA_REPORT),
+        ArtifactType.MANTIS_TICKET.value: top_rated_examples(ArtifactType.MANTIS_TICKET),
+    }
+    total_ratings = len(list_ratings(owner_id=owner_filter, limit=10_000))
+
+    return DashboardMetricsResponse(
+        workflow_status_counts=metrics.get("workflow_status", {}),
+        test_status_counts=metrics.get("test_status", {}),
+        average_ratings=averages,
+        top_rated_examples=top_examples,
+        total_ratings=total_ratings,
+    )
 
 
 @app.post(
