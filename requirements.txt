@@ -13,4 +13,5 @@ requests
 langchain
 langchain-core
 langchain-openai
+cryptography
 pytest

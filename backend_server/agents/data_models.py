@@ -17,6 +17,16 @@ class TestStatus(str, Enum):
     KNOWN_ISSUE = "known_issue"
     TROUBLESHOOT_AVAILABLE = "troubleshoot_available"
     UNCERTAIN = "uncertain"
+    NOT_RUN = "not_run"
+
+
+class WorkflowFunction(str, Enum):
+    """Optional capabilities that can be toggled per subscription."""
+
+    AUTO_TEST = "auto_test"
+    REQUEST_DETAILS = "request_additional_details"
+    PUBLIC_RESPONSE = "public_document_response"
+    CREATE_MANTIS_TICKET = "create_mantis_ticket"
 
 
 class WorkflowStatus(str, Enum):
@@ -112,4 +122,18 @@ class WorkflowResult:
     resolution_email: Optional[str]
     report: str
     actions: List[str] = field(default_factory=list)
+    mantis_ticket: Optional["BugTicket"] = None
+
+
+@dataclass
+class BugTicket:
+    """Structured payload representing a Mantis ticket draft."""
+
+    title: str
+    description: str
+    steps_to_reproduce: List[str]
+    expected_result: Optional[str]
+    actual_result: Optional[str]
+    severity: str
+    tags: List[str] = field(default_factory=list)
 

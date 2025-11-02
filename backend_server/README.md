@@ -199,6 +199,45 @@ the `smtp` block to enable automated responses:
 When SMTP settings are omitted the agent logs the drafted response without
 sending it, making it safe to validate the workflow in staging.
 
+### Designing a subscription portal
+
+The workflow can operate in a subscription mode where support engineers register
+their mailbox credentials, select keywords to watch for, and toggle which
+automation features the platform should run. The portal flow looks like this:
+
+1. **User registration** – Each user signs in via the existing `/auth/signup`
+   and `/auth/login` endpoints to obtain a bearer token.
+2. **Create a subscription** – Call `POST /subscriptions` with the IMAP host,
+   username, password (or app password), optional SMTP override, and the list of
+   subject keywords to match. You can also toggle the available automation
+   features:
+   - `auto_test`: launch the mobile automation agent to reproduce customer
+     steps.
+   - `request_additional_details`: allow the system to email the customer when
+     information is missing.
+   - `public_document_response`: send resolution emails that include known
+     troubleshooting content.
+   - `create_mantis_ticket`: generate a structured Mantis draft summarising the
+     findings.
+3. **Execute runs** – Invoke `POST /subscriptions/{id}/run` with the device
+   pool configuration. The backend will pull the latest messages matching the
+   stored keywords, execute the enabled functions, and return the outcome
+   alongside any follow-up or resolution emails.
+4. **Review drafts** – When the Mantis feature is enabled the response contains
+   a machine-generated ticket draft (`mantis_ticket`) with a title, description,
+   reproduction steps, and severity recommendation that can be pushed directly
+   into your bug tracker.
+
+All secrets are encrypted at rest using the `SUBSCRIPTION_SECRET_KEY`
+environment variable. Generate a key with
+
+```sh
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+and provide it when launching the API server. The same key must be reused across
+deployments to decrypt stored passwords.
+
 ### Connecting the mobile proxy or device cloud
 
 The mobile agent consumes a list of available devices from the `devices` array in

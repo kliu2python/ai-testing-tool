@@ -71,6 +71,7 @@ class QAReporterAgent:
             ),
             TestStatus.MISSING_INFORMATION: f"Missing information: {', '.join(outcome.missing_information)}",
             TestStatus.UNCERTAIN: outcome.details,
+            TestStatus.NOT_RUN: "Automation was skipped for this request.",
         }
         return mapping[outcome.status]
 

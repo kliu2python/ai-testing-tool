@@ -7,6 +7,7 @@ import datetime as dt
 from typing import List
 
 from backend_server.agents import (
+    BugTicket,
     CustomerIssue,
     EmailAgent,
     EmailMessage,
@@ -17,6 +18,7 @@ from backend_server.agents import (
     TestOutcome,
     TestStatus,
     WorkflowConfig,
+    WorkflowFunction,
     WorkflowStatus,
 )
 from backend_server.agents.mobile_agent import DeviceDescriptor
@@ -135,6 +137,85 @@ def test_orchestrator_handles_successful_run() -> None:
     assert result.report == "Final report"
     assert len(email_client.sent_messages) == 1
     assert mobile_agent.calls
+    assert isinstance(result.mantis_ticket, BugTicket)
+    assert result.mantis_ticket.title == "Customer issue"
+
+
+def test_orchestrator_skips_automation_when_disabled() -> None:
+    json_payload = (
+        '{"platform": "ios", "os_version": "17.4", "app_version": "5.2", '
+        '"steps": ["Open the app", "Log in"], "expected_result": "Success", "actual_result": "Crash"}'
+    )
+    email_llm = SequencedLLM([json_payload, "Automation is disabled but we captured the request."])
+    reporter_llm = SequencedLLM(["Automation skipped report"])
+
+    email_client = InMemoryEmailClient([_email_message("Another email")])
+    email_agent = EmailAgent(email_client, email_llm)
+
+    outcome = TestOutcome(status=TestStatus.PASSED, details="Would have reproduced")
+    mobile_agent = StubMobileAgent(outcome)
+    reporter = QAReporterAgent(reporter_llm)
+
+    enabled = {
+        WorkflowFunction.PUBLIC_RESPONSE,
+        WorkflowFunction.CREATE_MANTIS_TICKET,
+    }
+    orchestrator = MultiAgentOrchestrator(
+        email_agent,
+        mobile_agent,
+        reporter,
+        WorkflowConfig(issue_subject_keywords=["issue"], max_emails=1, enabled_functions=enabled),
+    )
+
+    result = asyncio.run(orchestrator.run("customer@example.com"))
+
+    assert result is not None
+    assert result.status == WorkflowStatus.RESOLVED
+    assert result.outcome is not None
+    assert result.outcome.status == TestStatus.NOT_RUN
+    assert "automation_skipped" in result.actions
+    assert result.resolution_email is None
+    assert mobile_agent.calls == []
+    assert isinstance(result.mantis_ticket, BugTicket)
+
+
+def test_orchestrator_does_not_request_details_when_disabled() -> None:
+    json_payload = (
+        '{"platform": "android", "app_version": "5.2", '
+        '"steps": ["Open"], "expected_result": "Success", "actual_result": "Crash"}'
+    )
+    email_llm = SequencedLLM([json_payload, "Follow up disabled."])
+    reporter_llm = SequencedLLM(["Missing info escalation"])
+
+    email_client = InMemoryEmailClient([_email_message("Sample email")])
+    email_agent = EmailAgent(email_client, email_llm)
+
+    mobile_outcome = TestOutcome(
+        status=TestStatus.MISSING_INFORMATION,
+        details="Need OS version",
+        missing_information=["os_version"],
+    )
+    mobile_agent = StubMobileAgent(mobile_outcome)
+    reporter = QAReporterAgent(reporter_llm)
+
+    enabled = {
+        WorkflowFunction.AUTO_TEST,
+        WorkflowFunction.CREATE_MANTIS_TICKET,
+    }
+    orchestrator = MultiAgentOrchestrator(
+        email_agent,
+        mobile_agent,
+        reporter,
+        WorkflowConfig(issue_subject_keywords=["issue"], max_emails=1, enabled_functions=enabled),
+    )
+
+    result = asyncio.run(orchestrator.run("customer@example.com"))
+
+    assert result is not None
+    assert result.status == WorkflowStatus.ESCALATED
+    assert result.follow_up_email is None
+    assert result.actions[-1] == "missing_information_without_follow_up"
+    assert isinstance(result.mantis_ticket, BugTicket)
 
 
 def test_mobile_agent_interprets_finish_status() -> None:
